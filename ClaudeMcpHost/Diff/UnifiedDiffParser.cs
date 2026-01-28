@@ -13,7 +13,7 @@ namespace McpHost.Diff
             DiffHunk current = null;
             ValidateNoBom(diffText);
 
-            var lines = diffText.Replace("\r\n", "\n").Split('\n');
+            var lines = diffText.Replace("\r\n", "\n").Replace("\r", "\n").Split('\n');
             int last = lines.Length - 1;
             int lineIndex = 0;
 

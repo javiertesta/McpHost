@@ -11,5 +11,6 @@ namespace McpHost.Core
         public string NewLine { get; set; }
         public string Text { get; set; }
         public string Sha256 { get; set; }
+        public string Sha256NormalizedWhitespace { get; set; }
     }
 }

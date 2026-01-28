@@ -1,4 +1,5 @@
-﻿using System;
+using System;
+using McpHost.Utils;
 
 namespace McpHost.Diff
 {
@@ -23,26 +24,36 @@ namespace McpHost.Diff
                 int idx = hunk.StartOriginal - 1;
                 foreach (var l in hunk.Lines)
                 {
-                    if (l.StartsWith(" "))
+                    if (l.StartsWith(" ") || l.StartsWith("-"))
                     {
-                        if (idx >= lines.Length ||
-                            lines[idx] != l.Substring(1))
+                        string kind = l.StartsWith(" ") ? "Contexto del patch no coincide" : "Línea a eliminar no coincide";
+
+                        if (idx >= lines.Length)
                         {
                             throw new InvalidOperationException(
-                                "Contexto del patch no coincide"
+                                kind + $" (EOF inesperado en línea {idx + 1}).\n" +
+                                "CLAUDE: re-leé el bloque exacto y regenerá el diff preservando tabs y sin envolver líneas."
                             );
                         }
-                        idx++;
-                    }
-                    else if (l.StartsWith("-"))
-                    {
-                        if (idx >= lines.Length ||
-                            lines[idx] != l.Substring(1))
+
+                        string fileLine = lines[idx] ?? "";
+                        string diffLine = l.Length > 0 ? l.Substring(1) : "";
+
+                        if (!SameLine(fileLine, diffLine))
                         {
+                            string fileVis = TextDebugUtil.Truncate(TextDebugUtil.MakeVisible(fileLine), 240);
+                            string diffVis = TextDebugUtil.Truncate(TextDebugUtil.MakeVisible(diffLine), 240);
+
                             throw new InvalidOperationException(
-                                "Línea a eliminar no coincide"
+                                kind + $" en línea {idx + 1}.\n" +
+                                $"Archivo: "{fileVis}"\n" +
+                                $"Diff:    "{diffVis}"\n\n" +
+                                "Nota: el MCP normaliza saltos de línea (LF/CRLF); el problema suele ser indentación (tabs vs espacios) " +
+                                "o líneas partidas en el diff (no cortar líneas largas).\n" +
+                                "CLAUDE: regenerá el diff sin partir líneas y preservando tabs."
                             );
                         }
+
                         idx++;
                     }
                     else if (l.StartsWith("+"))
@@ -51,6 +62,20 @@ namespace McpHost.Diff
                     }
                 }
             }
+        }
+
+        static bool SameLine(string fileLine, string diffLine)
+        {
+            // 1) Comparación estricta (pero ignorando trailing whitespace)
+            string a = (fileLine ?? "").TrimEnd(' ', '	');
+            string b = (diffLine ?? "").TrimEnd(' ', '	');
+            if (a == b) return true;
+
+            // 2) Comparación tolerante: colapsar cualquier secuencia de espacios/tabs a un solo espacio.
+            // Esto reduce falsos negativos cuando Claude cambia indentación (tabs vs espacios) o espaciado.
+            string a2 = WhitespaceNormalizeUtil.NormalizeLineLoose(a);
+            string b2 = WhitespaceNormalizeUtil.NormalizeLineLoose(b);
+            return a2 == b2;
         }
     }
 }

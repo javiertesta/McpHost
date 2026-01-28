@@ -1,10 +1,14 @@
-﻿namespace McpHost.Utils
+namespace McpHost.Utils
 {
     static class NewLineUtil
     {
         public static string Detect(string text)
         {
-            return text.Contains("\r\n") ? "\r\n" : "\n";
+            if (string.IsNullOrEmpty(text)) return System.Environment.NewLine;
+            if (text.Contains("\r\n")) return "\r\n";
+            if (text.Contains("\n")) return "\n";
+            if (text.Contains("\r")) return "\r";
+            return System.Environment.NewLine;
         }
     }
 }

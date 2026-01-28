@@ -55,6 +55,9 @@
     <Compile Include="FileSnapshotWriter.cs" />
     <Compile Include="HashUtil.cs" />
     <Compile Include="NewLineUtil.cs" />
+    <Compile Include="Utils\TextDebugUtil.cs" />
+    <Compile Include="Utils\UnicodeIssueUtil.cs" />
+    <Compile Include="Utils\WhitespaceNormalizeUtil.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>

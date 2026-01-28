@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using McpHost.Utils;
 
 namespace McpHost.Diff
 {
@@ -38,11 +39,13 @@ namespace McpHost.Diff
 
             // Bloquear caracteres peligrosos
             string resultText = string.Join("\n", result);
-            if (resultText.IndexOf('\uFFFD') >= 0 ||
-                resultText.IndexOf('\uFEFF') >= 0)
+            if (UnicodeIssueUtil.ContainsInvalidUnicode(resultText))
             {
                 throw new InvalidOperationException(
-                    "Carácter Unicode inválido detectado"
+                    UnicodeIssueUtil.BuildInvalidUnicodeError(
+                        resultText,
+                        "Carácter Unicode inválido detectado en el resultado del patch (U+FFFD o U+FEFF)."
+                    )
                 );
             }
             return resultText;
