@@ -295,7 +295,10 @@ namespace McpHost.Diff
         {
             int c = 0;
             foreach (var l in hunkLines)
-                if (l.StartsWith(" ") || l.StartsWith("-")) c++;
+            {
+                char p = l.Length > 0 ? l[0] : '\0';
+                if (p == ' ' || p == '-') c++;
+            }
             return c;
         }
 

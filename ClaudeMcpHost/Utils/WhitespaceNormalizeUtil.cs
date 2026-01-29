@@ -6,7 +6,7 @@ namespace McpHost.Utils
 {
     static class WhitespaceNormalizeUtil
     {
-        static readonly Regex WhitespaceRun = new Regex(@"[\t ]+", RegexOptions.Compiled);
+        static readonly Regex WhitespaceRun = new Regex(@"[\t \u00A0]+", RegexOptions.Compiled);
         /// <summary>
         /// Normaliza saltos de línea a LF y colapsa cualquier secuencia continua de espacios y/o tabs a un único espacio.
         /// Además, elimina whitespace al final de cada línea.
