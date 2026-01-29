@@ -6,6 +6,7 @@ namespace McpHost.Utils
 {
     static class WhitespaceNormalizeUtil
     {
+        static readonly Regex WhitespaceRun = new Regex(@"[\t ]+", RegexOptions.Compiled);
         /// <summary>
         /// Normaliza saltos de línea a LF y colapsa cualquier secuencia continua de espacios y/o tabs a un único espacio.
         /// Además, elimina whitespace al final de cada línea.
@@ -28,8 +29,8 @@ namespace McpHost.Utils
         public static string NormalizeLineLoose(string line)
         {
             if (line == null) return "";
-            // Colapsar mezcla de espacios/tabs a un solo espacio
-            string s = Regex.Replace(line, @"[\t ]+", " ");
+            // Colapsar mezcla de espacios/tabs a un solo espacio (regex pre-compilado)
+            string s = WhitespaceRun.Replace(line, " ");
             // Quitar trailing whitespace (después del colapso)
             s = s.TrimEnd(' ');
             return s;

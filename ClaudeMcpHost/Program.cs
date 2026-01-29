@@ -155,14 +155,14 @@ namespace McpHost
             if (string.IsNullOrEmpty(path)) return path;
 
             // Solo tiene sentido en Windows (en Linux esto puede romper rutas válidas).
-            if (Path.DirectorySeparatorChar != '\') return path;
+            if (Path.DirectorySeparatorChar != '\\') return path;
 
             // Caso: /mnt/d/Desarrollo/...  -> D:\Desarrollo\...
             if (path.StartsWith("/mnt/", StringComparison.OrdinalIgnoreCase) && path.Length >= 7)
             {
                 char drive = char.ToUpperInvariant(path[5]);
-                string rest = path.Substring(6).Replace('/', '\');
-                return drive + ":\" + rest;
+                string rest = path.Substring(6).Replace('/', '\\');
+                return drive + ":\\" + rest;
             }
 
             // Caso: D:\mnt\d\Desarrollo\... -> D:\Desarrollo\...
@@ -172,7 +172,7 @@ namespace McpHost
             {
                 char drive = char.ToUpperInvariant(m.Groups[2].Value[0]);
                 string rest = m.Groups[3].Value;
-                return drive + ":\" + rest;
+                return drive + ":\\" + rest;
             }
 
             return path;

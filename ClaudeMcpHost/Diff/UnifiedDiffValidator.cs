@@ -26,9 +26,12 @@ namespace McpHost.Diff
             if (touched > maxTouchedLines)
                 throw new InvalidOperationException("Patch demasiado grande");
 
-            double ratio = (double)touched / originalLineCount;
-            if (ratio > maxRatio)
-                throw new InvalidOperationException("Patch demasiado invasivo");
+            if (originalLineCount > 0)
+            {
+                double ratio = (double)touched / originalLineCount;
+                if (ratio > maxRatio)
+                    throw new InvalidOperationException("Patch demasiado invasivo");
+            }
         }
     }
 }

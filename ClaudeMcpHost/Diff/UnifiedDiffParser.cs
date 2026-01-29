@@ -5,7 +5,8 @@ namespace McpHost.Diff
 {
     static class UnifiedDiffParser
     {
-        static readonly Regex HunkHeader = new Regex(@"@@ -(\d+),(\d+) \+(\d+),(\d+) @@");
+        // Soporta formatos: @@ -5,3 +5,3 @@ y también @@ -5 +5 @@ (git omite ,1 cuando count=1)
+        static readonly Regex HunkHeader = new Regex(@"@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@");
 
         public static UnifiedDiff Parse(string diffText)
         {
@@ -32,9 +33,9 @@ namespace McpHost.Diff
                     current = new DiffHunk
                     {
                         StartOriginal = int.Parse(m.Groups[1].Value),
-                        LengthOriginal = int.Parse(m.Groups[2].Value),
+                        LengthOriginal = m.Groups[2].Success ? int.Parse(m.Groups[2].Value) : 1,
                         StartNew = int.Parse(m.Groups[3].Value),
-                        LengthNew = int.Parse(m.Groups[4].Value)
+                        LengthNew = m.Groups[4].Success ? int.Parse(m.Groups[4].Value) : 1
                     };
 
                     diff.Hunks.Add(current);

@@ -51,7 +51,6 @@
     <Compile Include="EncodingDetector.cs" />
     <Compile Include="FileGateway.cs" />
     <Compile Include="FileSnapshot.cs" />
-    <Compile Include="FileSnapshotLoader.cs" />
     <Compile Include="FileSnapshotWriter.cs" />
     <Compile Include="HashUtil.cs" />
     <Compile Include="NewLineUtil.cs" />

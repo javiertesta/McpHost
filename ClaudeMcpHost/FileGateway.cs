@@ -3,7 +3,6 @@ using McpHost.Utils;
 using System;
 using System.IO;
 using System.Text;
-using static System.Net.Mime.MediaTypeNames;
 
 namespace McpHost.Core
 {
@@ -45,23 +44,6 @@ namespace McpHost.Core
             };
         }
 
-        public void WriteFull(FileSnapshot snap, string newText)
-        {
-            // Normalización obligatoria
-            newText = newText.Normalize(NormalizationForm.FormC);
-
-            // Validación representabilidad
-            var safeEnc = Encoding.GetEncoding(
-                snap.Encoding.CodePage,
-                EncoderFallback.ExceptionFallback,
-                DecoderFallback.ExceptionFallback
-            );
-
-            byte[] newBytes = safeEnc.GetBytes(newText);
-
-            File.WriteAllBytes(snap.Path, newBytes);
-        }
-
         public void ApplyPatchOnly(FileSnapshot snap, string diffText, string expectedHash, bool allowLarge)
         {
             int maxTouchedLines = allowLarge ? 1000 : 200;
@@ -70,7 +52,10 @@ namespace McpHost.Core
             bool wsHashOk = string.Equals(snap.Sha256NormalizedWhitespace, expectedHash, StringComparison.OrdinalIgnoreCase);
 
             if (!strictHashOk && !wsHashOk)
-                throw new InvalidOperationException("Archivo modificado externamente (hash no coincide).");
+                throw new InvalidOperationException(
+                    "Archivo modificado externamente (hash no coincide).\n" +
+                    $"Hash esperado: {expectedHash}\n" +
+                    $"Hash archivo:  {snap.Sha256} (strict) / {snap.Sha256NormalizedWhitespace} (whitespace-normalized)");
 
             // Si el hash coincide solo en modo "whitespace-normalized", seguimos igual (esto habilita diffs donde
             // Claude cambió tabs/espacios o espaciado). Se recomienda revisar el patch resultante.
