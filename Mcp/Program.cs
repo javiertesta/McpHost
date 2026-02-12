@@ -1,10 +1,10 @@
 using McpHost.Core;
+using McpHost.Server;
 using McpHost.Utils;
 using System;
 using System.IO;
 using System.Linq;
 using System.Text;
-using System.Text.RegularExpressions;
 
 namespace McpHost
 {
@@ -41,6 +41,9 @@ namespace McpHost
                     case "read-range":
                         return CmdReadRange(gateway, args);
 
+                    case "serve":
+                        return CmdServeMcp(gateway, args);
+
                     default:
                         throw new ArgumentException("Comando desconocido: " + args[0] + ". Usá 'help' para ver comandos.");
                 }
@@ -65,16 +68,18 @@ namespace McpHost
 
         static void PrintHelp()
         {
-            Console.WriteLine("MCP Host (ClaudeMcpHost.exe)");
+            Console.WriteLine("MCP Host (Mcp.exe)");
             Console.WriteLine("Comandos:");
             Console.WriteLine("  read <path>");
             Console.WriteLine("  read-range <path> <startLine> <endLine>");
             Console.WriteLine("  apply-patch <path> <hash> <diffFile> [--large]");
+            Console.WriteLine("  serve --root <repoRoot>");
             Console.WriteLine();
             Console.WriteLine("Notas:");
             Console.WriteLine("  - En apply-patch, diffFile es una RUTA a un archivo .diff (unified diff), no el contenido del diff inline.");
             Console.WriteLine("  - Si invocás desde WSL, usá /mnt/<drive>/... (ej. /mnt/d/...) para que exista en Windows.");
             Console.WriteLine("  - El hash debe ser el valor completo (64 hex) que imprime el comando read.");
+            Console.WriteLine("  - serve: inicia el MCP server por stdio (JSON-RPC 2.0). Requiere --root para definir el directorio raíz del repo.");
         }
 
         static bool LooksLikeUnifiedDiffInline(string value)
@@ -91,21 +96,11 @@ namespace McpHost
             return false;
         }
 
-        static bool LooksLikeWslOnlyPath(string path)
-        {
-            if (string.IsNullOrEmpty(path)) return false;
-            if (Path.DirectorySeparatorChar != '\\') return false; // Solo para exe Windows.
-            if (path.StartsWith("/mnt/", StringComparison.OrdinalIgnoreCase)) return false;
-            if (path.StartsWith("/", StringComparison.Ordinal)) return true;
-            if (path.StartsWith("~", StringComparison.Ordinal)) return true;
-            return false;
-        }
-
         static int CmdRead(FileGateway gateway, string[] args)
         {
             if (args.Length < 2) throw new ArgumentException("read <path>");
 
-            string path = NormalizePathArg(args[1]);
+            string path = PathUtil.NormalizePathArg(args[1]);
 
             var snap = gateway.Read(path);
 
@@ -140,12 +135,12 @@ namespace McpHost
             if (LooksLikeUnifiedDiffInline(rawDiffArg))
                 throw new ArgumentException("apply-patch espera diffFile como ruta a un archivo .diff; recibí contenido de diff inline. Guardalo en un archivo (ej. /mnt/d/.../patch.diff) y pasá esa ruta. Usá 'help' para ejemplos.");
 
-            if (LooksLikeWslOnlyPath(rawDiffArg))
+            if (PathUtil.LooksLikeWslOnlyPath(rawDiffArg))
                 throw new ArgumentException("diffFile apunta a una ruta Linux/WSL (por ejemplo /tmp, /home, etc.). El .exe corre en Windows: creá el archivo en /mnt/<drive>/... y pasá esa ruta.");
 
-            string path = NormalizePathArg(args[1]);
+            string path = PathUtil.NormalizePathArg(args[1]);
             string hash = args[2];
-            string diffPath = NormalizePathArg(rawDiffArg);
+            string diffPath = PathUtil.NormalizePathArg(rawDiffArg);
 
             string diffText;
             try
@@ -171,13 +166,11 @@ namespace McpHost
             return 0;
         }
 
-
-
         static int CmdReadRange(FileGateway gateway, string[] args)
         {
             if (args.Length < 4) throw new ArgumentException("read-range <path> <startLine> <endLine>");
 
-            string path = NormalizePathArg(args[1]);
+            string path = PathUtil.NormalizePathArg(args[1]);
             if (!int.TryParse(args[2], out int startLine) || startLine <= 0)
                 throw new ArgumentException("startLine inválida (debe ser >= 1)");
             if (!int.TryParse(args[3], out int endLine) || endLine <= 0)
@@ -225,38 +218,25 @@ namespace McpHost
 
             return 0;
         }
-/// <summary>
-        /// Normaliza rutas cuando se llama desde WSL hacia un .exe de Windows.
-        /// Casos típicos:
-        ///  - /mnt/d/Algo/...              -> D:\Algo\...
-        ///  - D:\mnt\d\Algo\...        -> D:\Algo\...
-        /// </summary>
-        static string NormalizePathArg(string path)
+
+        static int CmdServeMcp(FileGateway gateway, string[] args)
         {
-            if (string.IsNullOrEmpty(path)) return path;
-
-            // Solo tiene sentido en Windows (en Linux esto puede romper rutas válidas).
-            if (Path.DirectorySeparatorChar != '\\') return path;
-
-            // Caso: /mnt/d/Desarrollo/...  -> D:\Desarrollo\...
-            if (path.StartsWith("/mnt/", StringComparison.OrdinalIgnoreCase) && path.Length >= 7)
+            string root = ".";
+            for (int i = 1; i < args.Length - 1; i++)
             {
-                char drive = char.ToUpperInvariant(path[5]);
-                string rest = path.Substring(6).Replace('/', '\\');
-                return drive + ":\\" + rest;
+                if (args[i].Equals("--root", StringComparison.OrdinalIgnoreCase))
+                {
+                    root = args[i + 1];
+                    i++;
+                }
             }
 
-            // Caso: D:\mnt\d\Desarrollo\... -> D:\Desarrollo\...
-            // (esto pasa si WSL hace una conversión rara al invocar el exe).
-            var m = Regex.Match(path, @"^([A-Za-z]):\\mnt\\([A-Za-z])\\(.*)$");
-            if (m.Success)
-            {
-                char drive = char.ToUpperInvariant(m.Groups[2].Value[0]);
-                string rest = m.Groups[3].Value;
-                return drive + ":\\" + rest;
-            }
-
-            return path;
+            root = PathUtil.NormalizePathArg(root);
+            var policy = new RepoPolicy(Path.GetFullPath(root));
+            var handlers = new McpToolHandlers(gateway, policy);
+            var server = new StdioMcpServer(handlers);
+            server.Run();
+            return 0;
         }
     }
 }

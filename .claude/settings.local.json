@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:chatgpt.com)",
+      "WebFetch(domain:)",
+      "Bash(python3:*)",
+      "Bash(where:*)",
+      "Bash(powershell -Command:*)",
+      "Bash(dir:*)",
+      "Bash(\"/c/Program Files/Microsoft Visual Studio/2022/Community/MSBuild/Current/Bin/MSBuild.exe\":*)",
+      "Bash(\"D:\\\\Desarrollo\\\\McpHost\\\\Mcp\\\\bin\\\\Debug\\\\Mcp.exe\" help:*)",
+      "Bash(\"D:\\\\Desarrollo\\\\McpHost\\\\Mcp\\\\bin\\\\Debug\\\\Mcp.exe\" read \"D:\\\\Desarrollo\\\\McpHost\\\\Mcp\\\\App.config\")",
+      "Bash(\"D:\\\\Desarrollo\\\\McpHost\\\\Mcp\\\\bin\\\\Debug\\\\Mcp.exe\" serve --root \"D:\\\\Desarrollo\\\\McpHost\")",
+      "Bash(printf:*)",
+      "Bash(\"/c/Program Files/Microsoft Visual Studio/2022/Community/MSBuild/Current/Bin/MSBuild.exe\" \"Mcp\\\\Mcp.csproj\" -t:Build -p:Configuration=Debug)"
+    ]
+  }
+}

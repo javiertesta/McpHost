@@ -1,4 +1,4 @@
-﻿using McpHost.Diff;
+using McpHost.Diff;
 using McpHost.Utils;
 using System;
 using System.IO;

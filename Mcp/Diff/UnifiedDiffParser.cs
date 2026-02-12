@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Text.RegularExpressions;
 
 namespace McpHost.Diff
@@ -58,7 +58,7 @@ namespace McpHost.Diff
             }
 
             if (diff.Hunks.Count == 0) throw new InvalidOperationException("Diff sin hunks");
-            
+
             foreach (var h in diff.Hunks)
             {
                 bool hasChange = false;

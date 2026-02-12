@@ -61,7 +61,7 @@ namespace McpHost.Utils
 
             if (found > maxOccurrences)
             {
-                sb.AppendLine(" - … y " + (found - maxOccurrences) + " ocurrencias más.");
+                sb.AppendLine(" - \u2026 y " + (found - maxOccurrences) + " ocurrencias más.");
             }
 
             return sb.ToString().TrimEnd();

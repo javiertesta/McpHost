@@ -1,0 +1,5 @@
+[mcp_servers.mcp_host]
+command = "D:\\Desarrollo\\McpHost\\Mcp\\bin\\Debug\\Mcp.exe"
+args = ["serve", "--root", "."]
+required = true
+enabled_tools = ["file.read", "file.read_range", "file.apply_patch_only"]

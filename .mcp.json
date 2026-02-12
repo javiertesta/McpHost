@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "mcp-host": {
+      "type": "stdio",
+      "command": "D:\\Desarrollo\\McpHost\\Mcp\\bin\\Debug\\Mcp.exe",
+      "args": ["serve", "--root", "."]
+    }
+  }
+}

@@ -17,7 +17,7 @@ namespace McpHost.Utils
             if (s == null) return "";
             if (maxLen <= 0) return "";
             if (s.Length <= maxLen) return s;
-            return s.Substring(0, maxLen) + "…";
+            return s.Substring(0, maxLen) + "\u2026";
         }
     }
 }
