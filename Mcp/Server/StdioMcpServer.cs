@@ -73,6 +73,10 @@ namespace McpHost.Server
                         return HandleToolsList(id);
                     case "tools/call":
                         return HandleToolsCall(id, msg);
+                    case "resources/list":
+                        return HandleResourcesList(id);
+                    case "resources/read":
+                        return HandleResourcesRead(id, msg);
                     default:
                         return MakeError(id, -32601, "Method not found: " + method);
                 }
@@ -88,10 +92,11 @@ namespace McpHost.Server
         {
             var result = new Dictionary<string, object>
             {
-                { "protocolVersion", "2025-11-05" },
+                { "protocolVersion", "2024-11-05" },
                 { "capabilities", new Dictionary<string, object>
                     {
-                        { "tools", new Dictionary<string, object> { { "listChanged", false } } }
+                        { "tools", new Dictionary<string, object> { { "listChanged", false } } },
+                        { "resources", new Dictionary<string, object> { { "listChanged", false } } }
                     }
                 },
                 { "serverInfo", new Dictionary<string, object>
@@ -159,6 +164,28 @@ namespace McpHost.Server
 
                 return MakeResult(id, result);
             }
+        }
+
+        string HandleResourcesList(object id)
+        {
+            var resources = _handlers.GetResourceDefinitions();
+            var result = new Dictionary<string, object> { { "resources", resources } };
+            return MakeResult(id, result);
+        }
+
+        string HandleResourcesRead(object id, Dictionary<string, object> msg)
+        {
+            var parms = msg.ContainsKey("params") ? msg["params"] as Dictionary<string, object> : null;
+            if (parms == null)
+                return MakeError(id, -32602, "Invalid params");
+
+            string uri = parms.ContainsKey("uri") ? parms["uri"] as string : null;
+            if (string.IsNullOrEmpty(uri))
+                return MakeError(id, -32602, "Missing resource uri");
+
+            var content = _handlers.ReadResource(uri);
+            var result = new Dictionary<string, object> { { "contents", content } };
+            return MakeResult(id, result);
         }
 
         string MakeResult(object id, object result)
