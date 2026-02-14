@@ -11,6 +11,7 @@ namespace McpHost.Server
     {
         public string Site { get; set; }
         public string ParametrizacionPath { get; set; }
+        public DbConnectionInfo Connection { get; set; }
         public List<string> Columns { get; set; }
         public List<List<object>> Rows { get; set; }
         public int RowCount { get; set; }
@@ -40,10 +41,14 @@ namespace McpHost.Server
             if (maxRows <= 0) maxRows = 200;
             if (maxRows > 2000) maxRows = 2000;
 
-            string cs = _resolver.ResolveConnectionString(site);
+            ResolvedDbConnection resolved = _resolver.Resolve(site);
+            string cs = resolved.ConnectionString;
+
             using (DbConnection conn = CreateConnection(cs))
             {
                 conn.Open();
+                EnsureDatabase(conn, resolved);
+
                 using (DbCommand cmd = conn.CreateCommand())
                 {
                     cmd.CommandText = sql;
@@ -74,8 +79,9 @@ namespace McpHost.Server
 
                         return new DbQueryResult
                         {
-                            Site = InferSite(site),
-                            ParametrizacionPath = InferParametrizacionPath(site),
+                            Site = string.IsNullOrWhiteSpace(resolved.SiteArg) ? InferSite(site) : resolved.SiteArg,
+                            ParametrizacionPath = resolved.ParametrizacionPath ?? "",
+                            Connection = ToConnectionInfo(resolved),
                             Columns = columns,
                             Rows = rows,
                             RowCount = rows.Count,
@@ -89,10 +95,15 @@ namespace McpHost.Server
         public object ExecuteScalar(string sql, string site)
         {
             ValidateReadOnlySql(sql);
-            string cs = _resolver.ResolveConnectionString(site);
+
+            ResolvedDbConnection resolved = _resolver.Resolve(site);
+            string cs = resolved.ConnectionString;
+
             using (DbConnection conn = CreateConnection(cs))
             {
                 conn.Open();
+                EnsureDatabase(conn, resolved);
+
                 using (DbCommand cmd = conn.CreateCommand())
                 {
                     cmd.CommandText = sql;
@@ -174,6 +185,42 @@ namespace McpHost.Server
             return conn;
         }
 
+        static void EnsureDatabase(DbConnection conn, ResolvedDbConnection resolved)
+        {
+            if (conn == null) return;
+            if (resolved == null) return;
+
+            // If the connection string specifies a database, enforce it explicitly.
+            // This avoids cases where the provider ends up in the account's default schema.
+            string db = (resolved.Database ?? "").Trim();
+            if (db.Length == 0) return;
+
+            try
+            {
+                conn.ChangeDatabase(db);
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException(
+                    "No se pudo seleccionar la base '" + db + "' tras abrir la conexión. Source=" + resolved.SourceDescription,
+                    ex);
+            }
+        }
+
+        static DbConnectionInfo ToConnectionInfo(ResolvedDbConnection resolved)
+        {
+            if (resolved == null) return null;
+            return new DbConnectionInfo
+            {
+                Source = resolved.SourceDescription,
+                Server = resolved.Server,
+                Port = resolved.Port,
+                Database = resolved.Database,
+                UserId = resolved.UserId,
+                ParametrizacionPath = resolved.ParametrizacionPath ?? ""
+            };
+        }
+
         static DbProviderFactory GetMySqlFactory()
         {
             if (_factory != null) return _factory;
@@ -185,7 +232,7 @@ namespace McpHost.Server
                 string[] candidates =
                 {
                     Environment.GetEnvironmentVariable("MCP_MYSQL_DATA_DLL_PATH"),
-                    @"D:\Desarrollo\DLLS\datos\MySql.Data.dll",
+                    @"D:\\Desarrollo\\DLLS\\datos\\MySql.Data.dll",
                     Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "MySql.Data.dll")
                 };
 
@@ -209,7 +256,7 @@ namespace McpHost.Server
                     }
                 }
 
-                throw new InvalidOperationException("No se pudo cargar MySql.Data.dll. Definí MCP_MYSQL_DATA_DLL_PATH o asegurá D:\\Desarrollo\\DLLS\\datos\\MySql.Data.dll.", last);
+                throw new InvalidOperationException("No se pudo cargar MySql.Data.dll. Definí MCP_MYSQL_DATA_DLL_PATH o asegurá D:\\\\Desarrollo\\\\DLLS\\\\datos\\\\MySql.Data.dll.", last);
             }
         }
 

@@ -56,8 +56,10 @@
     <Compile Include="HashUtil.cs" />
     <Compile Include="NewLineUtil.cs" />
     <Compile Include="Server\DbConnectionResolver.cs" />
+    <Compile Include="Server\DbConnectionInfo.cs" />
     <Compile Include="Server\DbCrypto.cs" />
     <Compile Include="Server\DbGateway.cs" />
+    <Compile Include="Server\ResolvedDbConnection.cs" />
     <Compile Include="Server\McpToolHandlers.cs" />
     <Compile Include="Server\RepoPolicy.cs" />
     <Compile Include="Server\StdioMcpServer.cs" />

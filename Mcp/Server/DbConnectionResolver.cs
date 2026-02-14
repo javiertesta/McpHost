@@ -9,7 +9,6 @@ namespace McpHost.Server
     class DbConnectionResolver
     {
         readonly string _root;
-        readonly Dictionary<string, string> _cache = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
         static readonly Regex SiteDirRegex = new Regex("^[A-Za-z]{3}[0-9]{3}P$", RegexOptions.Compiled);
 
@@ -18,45 +17,72 @@ namespace McpHost.Server
             _root = root;
         }
 
-        public string ResolveConnectionString(string site)
+        public ResolvedDbConnection Resolve(string site)
         {
-            string key = string.IsNullOrWhiteSpace(site) ? "__auto__" : site.Trim();
-            if (_cache.ContainsKey(key)) return _cache[key];
+            string siteArg = (site ?? "").Trim();
 
-            string env = ResolveFromEnvironment(site);
-            if (!string.IsNullOrWhiteSpace(env))
+            string envVarName;
+            string envValue = ResolveFromEnvironment(siteArg, out envVarName);
+            if (!string.IsNullOrWhiteSpace(envValue))
             {
-                string envNormalized = NormalizeConnectionString(env);
-                _cache[key] = envNormalized;
-                return envNormalized;
+                string normalized = NormalizeConnectionString(envValue);
+                return BuildResolved(
+                    sourceKind: "env",
+                    envVarName: envVarName,
+                    parametrizacionPath: "",
+                    connectionString: normalized,
+                    siteArg: siteArg);
             }
 
-            string parametrizacionPath = ResolveParametrizacionPath(site);
+            string parametrizacionPath = ResolveParametrizacionPath(siteArg);
             string encrypted = ReadBaseDeDatos(parametrizacionPath);
             string decrypted = DbCrypto.Decrypt(encrypted);
-            string normalized = NormalizeConnectionString(decrypted);
+            string cs = NormalizeConnectionString(decrypted);
 
-            _cache[key] = normalized;
-            return normalized;
+            return BuildResolved(
+                sourceKind: "xml",
+                envVarName: "",
+                parametrizacionPath: parametrizacionPath,
+                connectionString: cs,
+                siteArg: siteArg);
         }
 
-        static string ResolveFromEnvironment(string site)
+        static string ResolveFromEnvironment(string siteArg, out string envVarName)
         {
-            if (!string.IsNullOrWhiteSpace(site))
+            envVarName = null;
+
+            // If the caller provided a site, only accept a site-specific override.
+            // This avoids surprising behavior where a generic env var silently overrides the repo XML.
+            if (!string.IsNullOrWhiteSpace(siteArg))
             {
-                string normalized = Regex.Replace(site.ToUpperInvariant(), "[^A-Z0-9]", "_");
-                string siteVar = Environment.GetEnvironmentVariable("MCP_DB_CONNECTION_STRING_" + normalized);
-                if (!string.IsNullOrWhiteSpace(siteVar)) return siteVar;
+                string normalized = Regex.Replace(siteArg.ToUpperInvariant(), "[^A-Z0-9]", "_");
+                string name = "MCP_DB_CONNECTION_STRING_" + normalized;
+                string siteVar = Environment.GetEnvironmentVariable(name);
+                if (!string.IsNullOrWhiteSpace(siteVar))
+                {
+                    envVarName = name;
+                    return siteVar;
+                }
+
+                return null;
             }
 
-            return Environment.GetEnvironmentVariable("MCP_DB_CONNECTION_STRING");
+            const string generic = "MCP_DB_CONNECTION_STRING";
+            string genericVar = Environment.GetEnvironmentVariable(generic);
+            if (!string.IsNullOrWhiteSpace(genericVar))
+            {
+                envVarName = generic;
+                return genericVar;
+            }
+
+            return null;
         }
 
-        string ResolveParametrizacionPath(string site)
+        string ResolveParametrizacionPath(string siteArg)
         {
-            if (!string.IsNullOrWhiteSpace(site))
+            if (!string.IsNullOrWhiteSpace(siteArg))
             {
-                string requested = site.Trim();
+                string requested = siteArg.Trim();
 
                 if (Path.IsPathRooted(requested))
                 {
@@ -139,6 +165,52 @@ namespace McpHost.Server
                 cs += "sslMode=none;";
 
             return cs;
+        }
+
+        static ResolvedDbConnection BuildResolved(string sourceKind, string envVarName, string parametrizacionPath, string connectionString, string siteArg)
+        {
+            var resolved = new ResolvedDbConnection
+            {
+                SiteArg = siteArg ?? "",
+                SourceKind = sourceKind ?? "",
+                EnvVarName = envVarName ?? "",
+                ParametrizacionPath = parametrizacionPath ?? "",
+                ConnectionString = connectionString ?? ""
+            };
+
+            ApplySummaryFromConnectionString(resolved, connectionString);
+            return resolved;
+        }
+
+        static void ApplySummaryFromConnectionString(ResolvedDbConnection resolved, string connectionString)
+        {
+            if (resolved == null) return;
+
+            // Best-effort parsing without pulling MySql-specific builders into the server.
+            string cs = connectionString ?? "";
+            string[] parts = cs.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries);
+            foreach (string rawPart in parts)
+            {
+                string part = (rawPart ?? "").Trim();
+                if (part.Length == 0) continue;
+
+                int eq = part.IndexOf('=');
+                if (eq <= 0) continue;
+
+                string key = part.Substring(0, eq).Trim().ToLowerInvariant();
+                string val = part.Substring(eq + 1).Trim();
+
+                if (key == "server" || key == "host" || key == "data source" || key == "datasource")
+                    resolved.Server = val;
+                else if (key == "port")
+                {
+                    if (int.TryParse(val, out int p)) resolved.Port = p;
+                }
+                else if (key == "database" || key == "initial catalog")
+                    resolved.Database = val;
+                else if (key == "user id" || key == "userid" || key == "uid" || key == "user")
+                    resolved.UserId = val;
+            }
         }
     }
 }
