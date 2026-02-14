@@ -11,11 +11,6 @@ namespace McpHost.Diff
             int maxTouchedLines = 200
         )
         {
-            double maxRatio =
-                originalLineCount <= 10 ? 1.0 :
-                originalLineCount <= 50 ? 0.6 :
-                0.3;
-
             int touched =
                 diff.Hunks.Sum(h => h.Lines.Count(l =>
                     l.StartsWith("+") || l.StartsWith("-")));
@@ -26,8 +21,12 @@ namespace McpHost.Diff
             if (touched > maxTouchedLines)
                 throw new InvalidOperationException("Patch demasiado grande");
 
-            if (originalLineCount > 0)
+            // El ratio "lineas tocadas / lineas originales" es una mala metrica en archivos chicos
+            // (p.ej. archivos recien creados). Para evitar falsos positivos, solo lo evaluamos
+            // a partir de cierto tamano.
+            if (originalLineCount >= 150)
             {
+                double maxRatio = 0.3;
                 double ratio = (double)touched / originalLineCount;
                 if (ratio > maxRatio)
                     throw new InvalidOperationException("Patch demasiado invasivo");

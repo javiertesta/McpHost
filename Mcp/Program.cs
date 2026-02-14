@@ -72,7 +72,7 @@ namespace McpHost
             Console.WriteLine("Comandos:");
             Console.WriteLine("  read <path>");
             Console.WriteLine("  read-range <path> <startLine> <endLine>");
-            Console.WriteLine("  apply-patch <path> <hash> <diffFile> [--large]");
+            Console.WriteLine("  apply-patch <path> <hash> <diffFile> [--large|--extralarge]");
             Console.WriteLine("  serve --root <repoRoot>");
             Console.WriteLine();
             Console.WriteLine("Notas:");
@@ -128,7 +128,8 @@ namespace McpHost
 
         static int CmdApplyPatch(FileGateway gateway, string[] args)
         {
-            bool allowLarge = args.Contains("--large");
+            bool allowExtraLarge = args.Contains("--extralarge");
+            bool allowLarge = allowExtraLarge || args.Contains("--large");
             if (args.Length < 4) throw new ArgumentException("apply-patch <path> <hash> <diffFile>. Usá 'help' para ejemplos.");
 
             string rawDiffArg = args[3];
@@ -160,7 +161,7 @@ namespace McpHost
                 throw new ArgumentException("No existe el directorio de diffFile: " + diffPath);
             }
             var snap = gateway.Read(path);
-            gateway.ApplyPatchOnly(snap, diffText, hash, allowLarge);
+            gateway.ApplyPatchOnly(snap, diffText, hash, allowLarge, allowExtraLarge);
 
             Console.WriteLine("OK");
             return 0;

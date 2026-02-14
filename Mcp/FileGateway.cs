@@ -44,9 +44,9 @@ namespace McpHost.Core
             };
         }
 
-        public void ApplyPatchOnly(FileSnapshot snap, string diffText, string expectedHash, bool allowLarge)
+        public void ApplyPatchOnly(FileSnapshot snap, string diffText, string expectedHash, bool allowLarge, bool allowExtraLarge)
         {
-            int maxTouchedLines = allowLarge ? 1000 : 200;
+            int maxTouchedLines = allowExtraLarge ? 5000 : (allowLarge ? 1000 : 200);
 
             bool strictHashOk = string.Equals(snap.Sha256, expectedHash, StringComparison.OrdinalIgnoreCase);
             bool wsHashOk = string.Equals(snap.Sha256NormalizedWhitespace, expectedHash, StringComparison.OrdinalIgnoreCase);
@@ -82,6 +82,9 @@ namespace McpHost.Core
 
                 string patched = UnifiedDiffApplier.Apply(baseText, diff);
 
+                if (allowExtraLarge)
+                    WriteTimestampedBackup(snap);
+
                 FileSnapshotWriter.WritePatched(snap, patched);
             }
             catch (InvalidOperationException ex)
@@ -113,7 +116,7 @@ namespace McpHost.Core
                 message.StartsWith("Patch demasiado", StringComparison.OrdinalIgnoreCase))
             {
                 return message + "\n\n" +
-                       "CLAUDE: ajustá el diff (más chico y focalizado) o pedí confirmación para usar --large si realmente corresponde.";
+                       "CLAUDE: ajustá el diff (más chico y focalizado) o pedí confirmación para usar --large/--extralarge si realmente corresponde.";
             }
 
             if (message.StartsWith("Contexto del patch no coincide", StringComparison.OrdinalIgnoreCase) ||
@@ -131,6 +134,22 @@ namespace McpHost.Core
         static string NormalizeToLf(string text)
         {
             return text.Replace("\r\n", "\n").Replace("\r", "\n");
+        }
+
+        static void WriteTimestampedBackup(FileSnapshot snap)
+        {
+            string dir = Path.GetDirectoryName(snap.Path) ?? ".";
+            string name = Path.GetFileName(snap.Path);
+            string stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
+
+            string backupPath = Path.Combine(dir, name + ".bak-" + stamp);
+            for (int i = 1; File.Exists(backupPath); i++)
+            {
+                backupPath = Path.Combine(dir, name + ".bak-" + stamp + "-" + i);
+            }
+
+            // Backup byte-identico del archivo original (antes de escribir el patch).
+            File.WriteAllBytes(backupPath, snap.OriginalBytes);
         }
 
     }

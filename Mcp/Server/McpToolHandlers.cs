@@ -474,11 +474,14 @@ namespace McpHost.Server
             if (string.IsNullOrEmpty(diff))
                 return ErrorResult("Missing required argument: diff");
 
-            bool allowLarge = GetBoolArg(args, "allow_large", false);
+            bool allowExtraLarge =
+                GetBoolArg(args, "allow_extralarge", false) ||
+                GetBoolArg(args, "allow_extra_large", false);
+            bool allowLarge = allowExtraLarge || GetBoolArg(args, "allow_large", false);
 
             string resolved = _policy.ResolvePath(path, forWrite: true);
             var snap = _gateway.Read(resolved);
-            _gateway.ApplyPatchOnly(snap, diff, hash, allowLarge);
+            _gateway.ApplyPatchOnly(snap, diff, hash, allowLarge, allowExtraLarge);
 
             return new ToolResult
             {
