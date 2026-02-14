@@ -1,5 +1,5 @@
 [mcp_servers.mcp_host]
 command = "D:\\Desarrollo\\Claude\\Mcp.exe"
-args = ["serve", "--root", "."]
+args = ["serve"]
 required = true
 enabled_tools = ["file.read", "file.read_range", "file.apply_patch_only", "db.query", "db.scalar"]

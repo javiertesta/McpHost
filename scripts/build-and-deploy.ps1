@@ -24,7 +24,7 @@ if (-not $msbuild) {
   throw "MSBuild no encontrado. Instalá Visual Studio o Build Tools."
 }
 
-# If the existing exe is running, MSBuild can't overwrite it.
+# If the exe is running, MSBuild/Copy-Item can't overwrite it.
 if (Test-Path $outExe) {
   try {
     $procs = Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -eq $outExe }
@@ -34,6 +34,18 @@ if (Test-Path $outExe) {
     }
   } catch {
     # Best-effort; build will fail if still locked.
+  }
+}
+
+if (Test-Path $DeployExePath) {
+  try {
+    $procs = Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -eq $DeployExePath }
+    foreach ($p in $procs) {
+      Write-Host "Stopping process $($p.Name) (PID=$($p.ProcessId)) locking $DeployExePath"
+      Stop-Process -Id $p.ProcessId -Force
+    }
+  } catch {
+    # Best-effort; deploy will fail if still locked.
   }
 }
 

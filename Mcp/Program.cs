@@ -73,13 +73,13 @@ namespace McpHost
             Console.WriteLine("  read <path>");
             Console.WriteLine("  read-range <path> <startLine> <endLine>");
             Console.WriteLine("  apply-patch <path> <hash> <diffFile> [--large|--extralarge]");
-            Console.WriteLine("  serve --root <repoRoot>");
+            Console.WriteLine("  serve [--root <repoRoot>]");
             Console.WriteLine();
             Console.WriteLine("Notas:");
             Console.WriteLine("  - En apply-patch, diffFile es una RUTA a un archivo .diff (unified diff), no el contenido del diff inline.");
             Console.WriteLine("  - Si invocás desde WSL, usá /mnt/<drive>/... (ej. /mnt/d/...) para que exista en Windows.");
             Console.WriteLine("  - El hash debe ser el valor completo (64 hex) que imprime el comando read.");
-            Console.WriteLine("  - serve: inicia el MCP server por stdio (JSON-RPC 2.0). Requiere --root para definir el directorio raíz del repo.");
+            Console.WriteLine("  - serve: inicia el MCP server por stdio (JSON-RPC 2.0). Si no pasás --root, usa D:\\Desarrollo como root.");
         }
 
         static bool LooksLikeUnifiedDiffInline(string value)
@@ -220,15 +220,20 @@ namespace McpHost
             return 0;
         }
 
-        static int CmdServeMcp(FileGateway gateway, string[] args)
+                static int CmdServeMcp(FileGateway gateway, string[] args)
         {
-            string root = ".";
-            for (int i = 1; i < args.Length - 1; i++)
+            // Default: expanded root so Codex can operate outside the repo when no --root is provided.
+            string root = @"D:\Desarrollo";
+
+            for (int i = 1; i < args.Length; i++)
             {
                 if (args[i].Equals("--root", StringComparison.OrdinalIgnoreCase))
                 {
+                    if (i + 1 >= args.Length)
+                        throw new ArgumentException("serve: falta el valor de --root");
                     root = args[i + 1];
                     i++;
+                    continue;
                 }
             }
 

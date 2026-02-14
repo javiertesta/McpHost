@@ -3,7 +3,7 @@
     "mcp-host": {
       "type": "stdio",
       "command": "D:\\Desarrollo\\Claude\\Mcp.exe",
-      "args": ["serve", "--root", "."]
+      "args": ["serve"]
     }
   }
 }
