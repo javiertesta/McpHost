@@ -1,6 +1,7 @@
 using McpHost.Diff;
 using McpHost.Utils;
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Text;
 
@@ -46,16 +47,28 @@ namespace McpHost.Core
 
         public void ApplyPatchOnly(FileSnapshot snap, string diffText, string expectedHash, bool allowLarge, bool allowExtraLarge)
         {
+            ApplyPatchCore(snap, diffText, expectedHash, allowLarge, allowExtraLarge, parseOnly: false);
+        }
+
+        public void ValidatePatchOnly(FileSnapshot snap, string diffText, string expectedHash, bool allowLarge, bool allowExtraLarge)
+        {
+            ApplyPatchCore(snap, diffText, expectedHash, allowLarge, allowExtraLarge, parseOnly: true);
+        }
+
+        void ApplyPatchCore(FileSnapshot snap, string diffText, string expectedHash, bool allowLarge, bool allowExtraLarge, bool parseOnly)
+        {
             int maxTouchedLines = allowExtraLarge ? 5000 : (allowLarge ? 1000 : 200);
 
             bool strictHashOk = string.Equals(snap.Sha256, expectedHash, StringComparison.OrdinalIgnoreCase);
             bool wsHashOk = string.Equals(snap.Sha256NormalizedWhitespace, expectedHash, StringComparison.OrdinalIgnoreCase);
 
             if (!strictHashOk && !wsHashOk)
-                throw new InvalidOperationException(
+                throw new PatchException(
                     "Archivo modificado externamente (hash no coincide).\n" +
                     $"Hash esperado: {expectedHash}\n" +
-                    $"Hash archivo:  {snap.Sha256} (strict) / {snap.Sha256NormalizedWhitespace} (whitespace-normalized)");
+                    $"Hash archivo:  {snap.Sha256} (strict) / {snap.Sha256NormalizedWhitespace} (whitespace-normalized)",
+                    errorCode: "hash_mismatch",
+                    reason: "El hash recibido no coincide con el estado actual del archivo.");
 
             // Si el hash coincide solo en modo "whitespace-normalized", seguimos igual (esto habilita diffs donde
             // Claude cambió tabs/espacios o espaciado). Se recomienda revisar el patch resultante.
@@ -64,12 +77,13 @@ namespace McpHost.Core
             // va a rechazar SIEMPRE el resultado final. Cortamos temprano con un error
             // más accionable (y explícito para Claude).
             if (UnicodeIssueUtil.ContainsInvalidUnicode(snap.Text))
-                throw new InvalidOperationException(
+                throw new PatchException(
                     UnicodeIssueUtil.BuildInvalidUnicodeError(
                         snap.Text,
                         "El archivo de entrada contiene caracteres Unicode inválidos (U+FFFD o U+FEFF)."
-                    )
-                );
+                    ),
+                    errorCode: "invalid_unicode_in_input",
+                    reason: "El archivo contiene caracteres inválidos antes de aplicar el patch.");
 
             try
             {
@@ -80,6 +94,8 @@ namespace McpHost.Core
                 UnifiedDiffValidator.Validate(diff, baseText.Split('\n').Length, maxTouchedLines);
                 UnifiedDiffSemanticValidator.ValidateAgainstText(diff, baseText);
 
+                if (parseOnly) return;
+
                 string patched = UnifiedDiffApplier.Apply(baseText, diff);
 
                 if (allowExtraLarge)
@@ -87,9 +103,25 @@ namespace McpHost.Core
 
                 FileSnapshotWriter.WritePatched(snap, patched);
             }
+            catch (PatchException ex)
+            {
+                throw new PatchException(
+                    AugmentPatchError(ex.Message),
+                    ex.ErrorCode,
+                    ex.HunkIndex,
+                    ex.DiffLineNumber,
+                    ex.Reason,
+                    ex.ExpectedFormat,
+                    ex.ProblematicLine,
+                    ex);
+            }
             catch (InvalidOperationException ex)
             {
-                throw new InvalidOperationException(AugmentPatchError(ex.Message));
+                throw new PatchException(
+                    AugmentPatchError(ex.Message),
+                    errorCode: "patch_apply_failed",
+                    reason: ex.Message,
+                    inner: ex);
             }
         }
 
@@ -152,5 +184,46 @@ namespace McpHost.Core
             File.WriteAllBytes(backupPath, snap.OriginalBytes);
         }
 
+    }
+
+    class PatchException : InvalidOperationException
+    {
+        public string ErrorCode { get; private set; }
+        public int? HunkIndex { get; private set; }
+        public int? DiffLineNumber { get; private set; }
+        public string Reason { get; private set; }
+        public string ExpectedFormat { get; private set; }
+        public string ProblematicLine { get; private set; }
+
+        public PatchException(
+            string message,
+            string errorCode = null,
+            int? hunkIndex = null,
+            int? diffLineNumber = null,
+            string reason = null,
+            string expectedFormat = null,
+            string problematicLine = null,
+            Exception inner = null)
+            : base(message, inner)
+        {
+            ErrorCode = errorCode;
+            HunkIndex = hunkIndex;
+            DiffLineNumber = diffLineNumber;
+            Reason = reason;
+            ExpectedFormat = expectedFormat;
+            ProblematicLine = problematicLine;
+        }
+
+        public Dictionary<string, object> ToErrorData()
+        {
+            var data = new Dictionary<string, object>();
+            if (!string.IsNullOrEmpty(ErrorCode)) data["error_code"] = ErrorCode;
+            if (HunkIndex.HasValue) data["hunk_index"] = HunkIndex.Value;
+            if (DiffLineNumber.HasValue) data["diff_line_number"] = DiffLineNumber.Value;
+            if (!string.IsNullOrEmpty(Reason)) data["reason"] = Reason;
+            if (!string.IsNullOrEmpty(ExpectedFormat)) data["expected_format"] = ExpectedFormat;
+            if (!string.IsNullOrEmpty(ProblematicLine)) data["problematic_line"] = ProblematicLine;
+            return data;
+        }
     }
 }

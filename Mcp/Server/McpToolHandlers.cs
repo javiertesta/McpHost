@@ -12,6 +12,7 @@ namespace McpHost.Server
     {
         public List<object> Content { get; set; }
         public bool IsError { get; set; }
+        public Dictionary<string, object> ErrorData { get; set; }
     }
 
     class McpToolHandlers
@@ -98,7 +99,7 @@ namespace McpHost.Server
             tools.Add(new Dictionary<string, object>
             {
                 { "name", "file.apply_patch_only" },
-                { "description", "Apply a unified diff patch to a file. Requires the SHA-256 hash from the last file.read or file.read_range call to prevent editing stale content. The diff must be in standard unified diff format (git-style). Lines in the diff must start with ' ' (context), '+' (add), or '-' (remove)." },
+                { "description", "Apply a unified diff patch to a file. Requires the SHA-256 hash from the last file.read or file.read_range call to prevent editing stale content. The diff must be in standard unified diff format (git-style). Lines in the diff must start with ' ' (context), '+' (add), or '-' (remove). Supports parse_only=true for preflight validation without writing." },
                 { "inputSchema", new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -126,6 +127,12 @@ namespace McpHost.Server
                                     {
                                         { "type", "boolean" },
                                         { "description", "Set to true to allow patches touching more than 200 lines (up to 1000). Default: false." }
+                                    }
+                                },
+                                { "parse_only", new Dictionary<string, object>
+                                    {
+                                        { "type", "boolean" },
+                                        { "description", "Set to true to validate/parse the diff without writing file changes. Default: false." }
                                     }
                                 }
                             }
@@ -478,10 +485,29 @@ namespace McpHost.Server
                 GetBoolArg(args, "allow_extralarge", false) ||
                 GetBoolArg(args, "allow_extra_large", false);
             bool allowLarge = allowExtraLarge || GetBoolArg(args, "allow_large", false);
+            bool parseOnly = GetBoolArg(args, "parse_only", false);
 
             string resolved = _policy.ResolvePath(path, forWrite: true);
             var snap = _gateway.Read(resolved);
-            _gateway.ApplyPatchOnly(snap, diff, hash, allowLarge, allowExtraLarge);
+
+            try
+            {
+                if (parseOnly)
+                {
+                    _gateway.ValidatePatchOnly(snap, diff, hash, allowLarge, allowExtraLarge);
+                    return new ToolResult
+                    {
+                        IsError = false,
+                        Content = TextContent("OK - patch parsed and validated successfully (parse_only=true, no file changes).")
+                    };
+                }
+
+                _gateway.ApplyPatchOnly(snap, diff, hash, allowLarge, allowExtraLarge);
+            }
+            catch (PatchException ex)
+            {
+                return ErrorResult(ex.Message, ex.ToErrorData());
+            }
 
             return new ToolResult
             {
@@ -563,12 +589,13 @@ namespace McpHost.Server
             };
         }
 
-        ToolResult ErrorResult(string message)
+        ToolResult ErrorResult(string message, Dictionary<string, object> errorData = null)
         {
             return new ToolResult
             {
                 IsError = true,
-                Content = TextContent(message)
+                Content = TextContent(message),
+                ErrorData = errorData
             };
         }
 
