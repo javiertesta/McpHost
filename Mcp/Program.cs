@@ -45,7 +45,7 @@ namespace McpHost
                         return CmdServeMcp(gateway, args);
 
                     default:
-                        throw new ArgumentException("Comando desconocido: " + args[0] + ". Usá 'help' para ver comandos.");
+                        throw new ArgumentException("Comando desconocido: " + args[0] + ". UsÃƒÂ¡ 'help' para ver comandos.");
                 }
             }
             catch (Exception ex)
@@ -77,9 +77,11 @@ namespace McpHost
             Console.WriteLine();
             Console.WriteLine("Notas:");
             Console.WriteLine("  - En apply-patch, diffFile es una RUTA a un archivo .diff (unified diff), no el contenido del diff inline.");
-            Console.WriteLine("  - Si invocás desde WSL, usá /mnt/<drive>/... (ej. /mnt/d/...) para que exista en Windows.");
+            Console.WriteLine("  - Si invocas desde WSL, usa /mnt/<drive>/... (ej. /mnt/d/...) para que exista en Windows.");
             Console.WriteLine("  - El hash debe ser el valor completo (64 hex) que imprime el comando read.");
-            Console.WriteLine("  - serve: inicia el MCP server por stdio (JSON-RPC 2.0). Si no pasás --root, usa D:\\Desarrollo como root.");
+            Console.WriteLine("  - apply-patch (CLI) no tiene --parse-only; aplica cambios si el patch valida.");
+            Console.WriteLine("  - En modo MCP (serve), la tool file.apply_patch_only soporta parse_only=true para preflight sin escritura.");
+            Console.WriteLine("  - serve: inicia el MCP server por stdio (JSON-RPC 2.0). Si no pasas --root, usa D:\\Desarrollo como root.");
         }
 
         static bool LooksLikeUnifiedDiffInline(string value)
@@ -110,7 +112,7 @@ namespace McpHost
                 Console.Error.WriteLine(
                     UnicodeIssueUtil.BuildInvalidUnicodeError(
                         snap.Text,
-                        "WARNING: El archivo contiene caracteres Unicode inválidos (U+FFFD o U+FEFF).",
+                        "WARNING: El archivo contiene caracteres Unicode invÃƒÂ¡lidos (U+FFFD o U+FEFF).",
                         maxOccurrences: 3
                     )
                 );
@@ -130,14 +132,14 @@ namespace McpHost
         {
             bool allowExtraLarge = args.Contains("--extralarge");
             bool allowLarge = allowExtraLarge || args.Contains("--large");
-            if (args.Length < 4) throw new ArgumentException("apply-patch <path> <hash> <diffFile>. Usá 'help' para ejemplos.");
+            if (args.Length < 4) throw new ArgumentException("apply-patch <path> <hash> <diffFile>. UsÃƒÂ¡ 'help' para ejemplos.");
 
             string rawDiffArg = args[3];
             if (LooksLikeUnifiedDiffInline(rawDiffArg))
-                throw new ArgumentException("apply-patch espera diffFile como ruta a un archivo .diff; recibí contenido de diff inline. Guardalo en un archivo (ej. /mnt/d/.../patch.diff) y pasá esa ruta. Usá 'help' para ejemplos.");
+                throw new ArgumentException("apply-patch espera diffFile como ruta a un archivo .diff; recibÃƒÂ­ contenido de diff inline. Guardalo en un archivo (ej. /mnt/d/.../patch.diff) y pasÃƒÂ¡ esa ruta. UsÃƒÂ¡ 'help' para ejemplos.");
 
             if (PathUtil.LooksLikeWslOnlyPath(rawDiffArg))
-                throw new ArgumentException("diffFile apunta a una ruta Linux/WSL (por ejemplo /tmp, /home, etc.). El .exe corre en Windows: creá el archivo en /mnt/<drive>/... y pasá esa ruta.");
+            Console.WriteLine("  - Si invocas desde WSL, usa /mnt/<drive>/... (ej. /mnt/d/...) para que exista en Windows.");
 
             string path = PathUtil.NormalizePathArg(args[1]);
             string hash = args[2];
@@ -150,7 +152,7 @@ namespace McpHost
             }
             catch (ArgumentException)
             {
-                throw new ArgumentException("diffFile inválido. Debe ser una ruta a un archivo .diff. No pegues el diff inline; guardalo en un archivo y pasá esa ruta. Usá 'help' para ejemplos.");
+                throw new ArgumentException("diffFile invÃƒÂ¡lido. Debe ser una ruta a un archivo .diff. No pegues el diff inline; guardalo en un archivo y pasÃƒÂ¡ esa ruta. UsÃƒÂ¡ 'help' para ejemplos.");
             }
             catch (FileNotFoundException)
             {
@@ -173,9 +175,9 @@ namespace McpHost
 
             string path = PathUtil.NormalizePathArg(args[1]);
             if (!int.TryParse(args[2], out int startLine) || startLine <= 0)
-                throw new ArgumentException("startLine inválida (debe ser >= 1)");
+                throw new ArgumentException("startLine invÃƒÂ¡lida (debe ser >= 1)");
             if (!int.TryParse(args[3], out int endLine) || endLine <= 0)
-                throw new ArgumentException("endLine inválida (debe ser >= 1)");
+                throw new ArgumentException("endLine invÃƒÂ¡lida (debe ser >= 1)");
             if (endLine < startLine)
             {
                 int tmp = startLine;
@@ -190,7 +192,7 @@ namespace McpHost
                 Console.Error.WriteLine(
                     UnicodeIssueUtil.BuildInvalidUnicodeError(
                         snap.Text,
-                        "WARNING: El archivo contiene caracteres Unicode inválidos (U+FFFD o U+FEFF).",
+                        "WARNING: El archivo contiene caracteres Unicode invÃƒÂ¡lidos (U+FFFD o U+FEFF).",
                         maxOccurrences: 3
                     )
                 );
@@ -246,3 +248,4 @@ namespace McpHost
         }
     }
 }
+

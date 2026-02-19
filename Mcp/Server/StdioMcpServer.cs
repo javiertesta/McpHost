@@ -141,6 +141,8 @@ namespace McpHost.Server
                 var toolResult = _handlers.CallTool(toolName, arguments);
                 var result = new Dictionary<string, object> { { "content", toolResult.Content } };
                 if (toolResult.IsError) result["isError"] = true;
+                if (toolResult.IsError && toolResult.ErrorData != null && toolResult.ErrorData.Count > 0)
+                    result["error"] = toolResult.ErrorData;
                 return MakeResult(id, result);
             }
             catch (Exception ex)
