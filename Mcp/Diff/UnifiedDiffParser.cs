@@ -57,24 +57,20 @@ namespace McpHost.Diff
                 {
                     if (raw.Length == 0)
                     {
-                        // Tratar línea vacía como contexto vacío (compatible con git/patch)
-                        current.Lines.Add(" ");
+                        throw new PatchException(
+                            "Diff inválido: línea vacía en hunk sin prefijo.",
+                            errorCode: "invalid_empty_hunk_line",
+                            hunkIndex: diff.Hunks.Count,
+                            diffLineNumber: lineIndex,
+                            reason: "Cada línea dentro del hunk debe iniciar con ' ', '+' o '-'.",
+                            expectedFormat: "No enviar líneas vacías dentro del hunk; para línea vacía de contexto usar ' ' y para cambios usar '+' o '-'.");
+                    }
+                    else if (raw.StartsWith("\\ No newline at end of file", StringComparison.Ordinal))
+                    {
+                        // Marcador estándar de unified diff. No representa una línea del hunk.
                     }
                     else
                     {
-                        // Espacios antes de + o - → diff inválido
-                        if (raw.Length >= 2 && raw[0] == ' ' && (raw[1] == '+' || raw[1] == '-'))
-                        {
-                            throw new PatchException(
-                                "Diff inválido: espacios antes del prefijo '+' o '-'.",
-                                errorCode: "invalid_hunk_line_prefix",
-                                hunkIndex: diff.Hunks.Count,
-                                diffLineNumber: lineIndex,
-                                reason: "Línea de hunk con espacios antes de '+' o '-'.",
-                                expectedFormat: "Cada línea del hunk debe iniciar con ' ', '+' o '-'.",
-                                problematicLine: Truncate(raw, 240));
-                        }
-
                         char p = raw[0];
                         if (p != ' ' && p != '+' && p != '-')
                         {
@@ -106,13 +102,18 @@ namespace McpHost.Diff
             {
                 var h = diff.Hunks[i];
                 bool hasChange = false;
+                int originalConsumed = 0;
+                int newProduced = 0;
+
                 foreach (var line in h.Lines)
                 {
                     if (line[0] == '+' || line[0] == '-')
                     {
                         hasChange = true;
-                        break;
                     }
+
+                    if (line[0] == ' ' || line[0] == '-') originalConsumed++;
+                    if (line[0] == ' ' || line[0] == '+') newProduced++;
                 }
 
                 if (!hasChange)
@@ -122,6 +123,18 @@ namespace McpHost.Diff
                         errorCode: "hunk_without_changes",
                         hunkIndex: i + 1,
                         reason: "El hunk contiene solo contexto, sin líneas '+' ni '-'.");
+                }
+
+                if (originalConsumed != h.LengthOriginal || newProduced != h.LengthNew)
+                {
+                    throw new PatchException(
+                        "Hunk inválido: los conteos del encabezado no coinciden con las líneas del hunk.",
+                        errorCode: "hunk_length_mismatch",
+                        hunkIndex: i + 1,
+                        reason:
+                            $"Header: -{h.StartOriginal},{h.LengthOriginal} +{h.StartNew},{h.LengthNew}. " +
+                            $"Contenido: original={originalConsumed}, nuevo={newProduced}.",
+                        expectedFormat: "@@ -start[,count] +start[,count] @@ con counts consistentes con líneas ' ', '-', '+'.");
                 }
             }
 

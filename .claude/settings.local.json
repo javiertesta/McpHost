@@ -12,7 +12,21 @@
       "Bash(\"D:\\\\Desarrollo\\\\McpHost\\\\Mcp\\\\bin\\\\Debug\\\\Mcp.exe\" read \"D:\\\\Desarrollo\\\\McpHost\\\\Mcp\\\\App.config\")",
       "Bash(\"D:\\\\Desarrollo\\\\McpHost\\\\Mcp\\\\bin\\\\Debug\\\\Mcp.exe\" serve)",
       "Bash(printf:*)",
-      "Bash(\"/c/Program Files/Microsoft Visual Studio/2022/Community/MSBuild/Current/Bin/MSBuild.exe\" \"Mcp\\\\Mcp.csproj\" -t:Build -p:Configuration=Debug)"
+      "Bash(\"/c/Program Files/Microsoft Visual Studio/2022/Community/MSBuild/Current/Bin/MSBuild.exe\" \"Mcp\\\\Mcp.csproj\" -t:Build -p:Configuration=Debug)",
+      "mcp__mcp-host__file_read",
+      "mcp__mcp-host__file_read_range",
+      "mcp__mcp-host__file_apply_patch_only",
+      "Bash(\"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\18\\\\Community\\\\MSBuild\\\\Current\\\\Bin\\\\amd64\\\\MSBuild.exe\":*)",
+      "Bash(\"/c/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/amd64/MSBuild.exe\":*)",
+      "Bash(cmd:*)",
+      "Bash(ag)",
+      "Bash(ack\" 2>/dev/null; ls \"C:ProgramDatachocolateybin\"\")",
+      "Bash(\"C:/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/amd64/MSBuild.exe\":*)",
+      "Bash(MSYS_NO_PATHCONV=1 \"C:/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/amd64/MSBuild.exe\":*)"
     ]
-  }
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "mcp-host"
+  ]
 }

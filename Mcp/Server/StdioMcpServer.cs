@@ -136,9 +136,12 @@ namespace McpHost.Server
                 ? parms["arguments"] as Dictionary<string, object>
                 : new Dictionary<string, object>();
 
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            Console.Error.WriteLine("[" + DateTime.Now.ToString("HH:mm:ss") + "] mcp start: " + toolName);
             try
             {
                 var toolResult = _handlers.CallTool(toolName, arguments);
+                Console.Error.WriteLine("[" + DateTime.Now.ToString("HH:mm:ss") + "] mcp done: " + toolName + " (" + sw.ElapsedMilliseconds + "ms)");
                 var result = new Dictionary<string, object> { { "content", toolResult.Content } };
                 if (toolResult.IsError) result["isError"] = true;
                 if (toolResult.IsError && toolResult.ErrorData != null && toolResult.ErrorData.Count > 0)
@@ -147,7 +150,7 @@ namespace McpHost.Server
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine("Tool error (" + toolName + "): " + ex.Message);
+                Console.Error.WriteLine("[" + DateTime.Now.ToString("HH:mm:ss") + "] mcp error: " + toolName + " (" + sw.ElapsedMilliseconds + "ms): " + ex.Message);
 
                 var content = new List<object>
                 {

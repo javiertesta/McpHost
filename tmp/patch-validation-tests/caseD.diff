@@ -1,0 +1,7 @@
+--- a/caseD.txt
++++ b/caseD.txt
+@@ -1,3 +1,3 @@
+ aa
+-WRONG
++BB
+ cc

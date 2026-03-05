@@ -3,6 +3,7 @@ using McpHost.Utils;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Threading.Tasks;
 using System.Text;
 
 namespace McpHost.Core
@@ -11,7 +12,10 @@ namespace McpHost.Core
     {
         public FileSnapshot Read(string path)
         {
-            byte[] bytes = File.ReadAllBytes(path);
+            var readTask = Task.Run(() => File.ReadAllBytes(path));
+            if (!readTask.Wait(10000))
+                throw new InvalidOperationException("File read timed out after 10s: " + path);
+            byte[] bytes = readTask.Result;
 
             bool hasBom;
             Encoding enc = EncodingDetector.Detect(bytes, out hasBom);
@@ -92,11 +96,27 @@ namespace McpHost.Core
                 string baseText = NormalizeToLf(snap.Text);
 
                 UnifiedDiffValidator.Validate(diff, baseText.Split('\n').Length, maxTouchedLines);
-                UnifiedDiffSemanticValidator.ValidateAgainstText(diff, baseText);
 
-                if (parseOnly) return;
+                try
+                {
+                    UnifiedDiffSemanticValidator.ValidateAgainstText(diff, baseText);
+                }
+                catch (InvalidOperationException ex)
+                {
+                    throw new PatchException(
+                        ex.Message,
+                        errorCode: "patch_semantic_mismatch",
+                        reason: ex.Message,
+                        inner: ex);
+                }
 
-                string patched = UnifiedDiffApplier.Apply(baseText, diff);
+                if (parseOnly)
+                {
+                    ExternalPatchEngine.Validate(diffText, baseText);
+                    return;
+                }
+
+                string patched = ExternalPatchEngine.Apply(diffText, baseText);
 
                 if (allowExtraLarge)
                     WriteTimestampedBackup(snap);
@@ -140,8 +160,7 @@ namespace McpHost.Core
                 message.StartsWith("Hunk inválido", StringComparison.OrdinalIgnoreCase))
             {
                 return message + "\n\n" +
-                       newlineNote + "\n" +
-                       "CLAUDE: regenerá el diff como *unified diff* (git-style) y asegurate de que cada línea del hunk empiece con ' ', '+' o '-'.";
+                       "DIFF RECHAZADO: Comprobá que el formato utilizado sea el admitido por patch.exe (el que viene incluído con VS Code)";
             }
 
             if (message.StartsWith("Patch vacío", StringComparison.OrdinalIgnoreCase) ||

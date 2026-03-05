@@ -1,0 +1,7 @@
+--- a/caseB.txt
++++ b/caseB.txt
+@@ -1,1 +1,1 @@
+ x
+-y
++Y
+ z

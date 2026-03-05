@@ -206,6 +206,140 @@ namespace McpHost.Server
                 }
             });
 
+            // file.grep
+            tools.Add(new Dictionary<string, object>
+            {
+                { "name", "file.grep" },
+                { "description", "Search for a regex pattern in files under a path. Returns matching lines with line numbers and optional context. Uses rg (ripgrep) internally." },
+                { "inputSchema", new Dictionary<string, object>
+                    {
+                        { "type", "object" },
+                        { "properties", new Dictionary<string, object>
+                            {
+                                { "pattern", new Dictionary<string, object>
+                                    {
+                                        { "type", "string" },
+                                        { "description", "Regex pattern to search for." }
+                                    }
+                                },
+                                { "path", new Dictionary<string, object>
+                                    {
+                                        { "type", "string" },
+                                        { "description", "File or directory to search in." }
+                                    }
+                                },
+                                { "glob", new Dictionary<string, object>
+                                    {
+                                        { "type", "string" },
+                                        { "description", "File filter glob, e.g. \"*.vb\" or \"**/*.cs\"." }
+                                    }
+                                },
+                                { "context_lines", new Dictionary<string, object>
+                                    {
+                                        { "type", "integer" },
+                                        { "description", "Lines of context before and after each match (default 0)." }
+                                    }
+                                },
+                                { "case_insensitive", new Dictionary<string, object>
+                                    {
+                                        { "type", "boolean" },
+                                        { "description", "Case-insensitive matching (default false)." }
+                                    }
+                                },
+                                { "max_matches", new Dictionary<string, object>
+                                    {
+                                        { "type", "integer" },
+                                        { "description", "Max total matches returned (default 200)." }
+                                    }
+                                }
+                            }
+                        },
+                        { "required", new[] { "pattern", "path" } }
+                    }
+                }
+            });
+
+            // file.list
+            tools.Add(new Dictionary<string, object>
+            {
+                { "name", "file.list" },
+                { "description", "List files under a directory matching an optional glob pattern." },
+                { "inputSchema", new Dictionary<string, object>
+                    {
+                        { "type", "object" },
+                        { "properties", new Dictionary<string, object>
+                            {
+                                { "path", new Dictionary<string, object>
+                                    {
+                                        { "type", "string" },
+                                        { "description", "Root directory to list files in." }
+                                    }
+                                },
+                                { "pattern", new Dictionary<string, object>
+                                    {
+                                        { "type", "string" },
+                                        { "description", "Glob pattern, e.g. \"**/*.vb\" (default: all files)." }
+                                    }
+                                },
+                                { "max_files", new Dictionary<string, object>
+                                    {
+                                        { "type", "integer" },
+                                        { "description", "Max files returned (default 500)." }
+                                    }
+                                }
+                            }
+                        },
+                        { "required", new[] { "path" } }
+                    }
+                }
+            });
+
+            // file.stat
+            tools.Add(new Dictionary<string, object>
+            {
+                { "name", "file.stat" },
+                { "description", "Return metadata for a file (hash, encoding, line count, size) without returning its content. Useful to get a hash before patching." },
+                { "inputSchema", new Dictionary<string, object>
+                    {
+                        { "type", "object" },
+                        { "properties", new Dictionary<string, object>
+                            {
+                                { "path", new Dictionary<string, object>
+                                    {
+                                        { "type", "string" },
+                                        { "description", "Absolute or repo-relative path to the file." }
+                                    }
+                                }
+                            }
+                        },
+                        { "required", new[] { "path" } }
+                    }
+                }
+            });
+
+            // file.outline
+            tools.Add(new Dictionary<string, object>
+            {
+                { "name", "file.outline" },
+                { "description", "Return the structural outline of a source file (classes, methods, functions, properties) without the implementation body. Supports VB.NET (.vb) and C# (.cs)." },
+                { "inputSchema", new Dictionary<string, object>
+                    {
+                        { "type", "object" },
+                        { "properties", new Dictionary<string, object>
+                            {
+                                { "path", new Dictionary<string, object>
+                                    {
+                                        { "type", "string" },
+                                        { "description", "Absolute or repo-relative path to the source file." }
+                                    }
+                                }
+                            }
+                        },
+                        { "required", new[] { "path" } }
+                    }
+                }
+            });
+
             return tools;
         }
 
@@ -214,7 +348,7 @@ namespace McpHost.Server
             var resources = new List<object>();
             string root = _policy.Root;
 
-            foreach (string fullPath in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+            foreach (string fullPath in EnumerateFilesSkipDenied(root))
             {
                 string relative = GetRelativePath(root, fullPath);
                 if (string.IsNullOrEmpty(relative)) continue;
@@ -355,6 +489,10 @@ namespace McpHost.Server
                 case "file.apply_patch_only": return HandleApplyPatch(arguments);
                 case "db.query": return HandleDbQuery(arguments);
                 case "db.scalar": return HandleDbScalar(arguments);
+                case "file.grep": return HandleFileGrep(arguments);
+                case "file.list": return HandleFileList(arguments);
+                case "file.stat": return HandleFileStat(arguments);
+                case "file.outline": return HandleFileOutline(arguments);
                 default:
                     return new ToolResult
                     {
@@ -550,6 +688,141 @@ namespace McpHost.Server
             };
         }
 
+        ToolResult HandleFileGrep(Dictionary<string, object> args)
+        {
+            string pattern = GetStringArg(args, "pattern");
+            if (string.IsNullOrEmpty(pattern))
+                return ErrorResult("Missing required argument: pattern");
+
+            string path = GetStringArg(args, "path");
+            if (string.IsNullOrEmpty(path))
+                return ErrorResult("Missing required argument: path");
+
+            string glob = GetStringArg(args, "glob");
+            int contextLines = GetIntArg(args, "context_lines", 0);
+            bool caseInsensitive = GetBoolArg(args, "case_insensitive", false);
+            int maxMatches = GetIntArg(args, "max_matches", 200);
+            bool multiline = GetBoolArg(args, "multiline", false);
+
+            string resolved = _policy.ResolvePath(path);
+
+            List<GrepResult> results;
+            try
+            {
+                results = GrepEngine.Search(pattern, resolved, glob, contextLines, caseInsensitive, maxMatches, multiline);
+            }
+            catch (Exception ex)
+            {
+                return ErrorResult(ex.Message);
+            }
+
+            int matchCount = 0;
+            var sb = new StringBuilder();
+            foreach (var r in results)
+            {
+                if (!r.IsContext) matchCount++;
+                string prefix = r.IsContext ? "-" : ":";
+                sb.AppendLine(r.File + ":" + r.Line + prefix + " " + r.Text);
+            }
+
+            bool truncated = matchCount >= maxMatches && maxMatches > 0;
+            sb.AppendLine(_json.Serialize(new Dictionary<string, object>
+            {
+                { "total_matches", matchCount },
+                { "truncated", truncated }
+            }));
+
+            return new ToolResult { IsError = false, Content = TextContent(sb.ToString()) };
+        }
+
+        ToolResult HandleFileList(Dictionary<string, object> args)
+        {
+            string path = GetStringArg(args, "path");
+            if (string.IsNullOrEmpty(path))
+                return ErrorResult("Missing required argument: path");
+
+            string pattern = GetStringArg(args, "pattern") ?? "*";
+            int maxFiles = GetIntArg(args, "max_files", 500);
+
+            string resolved = _policy.ResolvePath(path);
+
+            var sb = new StringBuilder();
+            int count = 0;
+            bool truncated = false;
+
+            foreach (string fullPath in Directory.EnumerateFiles(resolved, pattern, SearchOption.AllDirectories))
+            {
+                string relative = GetRelativePath(resolved, fullPath);
+                if (IsDeniedForResources(relative)) continue;
+
+                if (count >= maxFiles) { truncated = true; break; }
+                sb.AppendLine(relative.Replace('\\', '/'));
+                count++;
+            }
+
+            sb.AppendLine(_json.Serialize(new Dictionary<string, object>
+            {
+                { "total", count },
+                { "truncated", truncated }
+            }));
+
+            return new ToolResult { IsError = false, Content = TextContent(sb.ToString()) };
+        }
+
+        ToolResult HandleFileStat(Dictionary<string, object> args)
+        {
+            string path = GetStringArg(args, "path");
+            if (string.IsNullOrEmpty(path))
+                return ErrorResult("Missing required argument: path");
+
+            string resolved = _policy.ResolvePath(path);
+            var snap = _gateway.Read(resolved);
+
+            int lineCount = snap.Text.Split('\n').Length;
+            var meta = new Dictionary<string, object>
+            {
+                { "hash_strict", snap.Sha256 },
+                { "hash_normalized", snap.Sha256NormalizedWhitespace },
+                { "encoding", snap.Encoding.WebName },
+                { "has_bom", snap.HasBom },
+                { "newline", DescribeNewline(snap.NewLine) },
+                { "line_count", lineCount },
+                { "size_bytes", snap.OriginalBytes.Length }
+            };
+
+            return new ToolResult { IsError = false, Content = TextContent(_json.Serialize(meta)) };
+        }
+
+        ToolResult HandleFileOutline(Dictionary<string, object> args)
+        {
+            string path = GetStringArg(args, "path");
+            if (string.IsNullOrEmpty(path))
+                return ErrorResult("Missing required argument: path");
+
+            string resolved = _policy.ResolvePath(path);
+            var snap = _gateway.Read(resolved);
+            string ext = Path.GetExtension(resolved);
+
+            List<OutlineItem> items;
+            try
+            {
+                items = OutlineEngine.GetOutline(snap.Text, ext);
+            }
+            catch (Exception ex)
+            {
+                return ErrorResult(ex.Message);
+            }
+
+            var sb = new StringBuilder();
+            foreach (var item in items)
+            {
+                string access = string.IsNullOrEmpty(item.Access) ? "" : item.Access + " ";
+                sb.AppendLine($"{item.Line,6}: {access}{item.Kind} {item.Name}");
+            }
+
+            return new ToolResult { IsError = false, Content = TextContent(sb.ToString()) };
+        }
+
         // --- helpers ---
 
         static string GetStringArg(Dictionary<string, object> args, string key)
@@ -605,6 +878,20 @@ namespace McpHost.Server
             if (nl == "\n") return "LF";
             if (nl == "\r") return "CR";
             return "CRLF";
+        }
+        static IEnumerable<string> EnumerateFilesSkipDenied(string dir)
+        {
+            var queue = new Queue<string>();
+            queue.Enqueue(dir);
+            while (queue.Count > 0)
+            {
+                string current = queue.Dequeue();
+                foreach (string f in Directory.EnumerateFiles(current))
+                    yield return f;
+                foreach (string d in Directory.EnumerateDirectories(current))
+                    if (!IsDeniedForResources(Path.GetFileName(d)))
+                        queue.Enqueue(d);
+            }
         }
     }
 }

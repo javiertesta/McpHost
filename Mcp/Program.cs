@@ -4,6 +4,7 @@ using McpHost.Utils;
 using System;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 
 namespace McpHost 
@@ -130,6 +131,8 @@ namespace McpHost
 
         static int CmdApplyPatch(FileGateway gateway, string[] args)
         {
+            string exeDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+            McpConfig.Load(exeDir);
             bool allowExtraLarge = args.Contains("--extralarge");
             bool allowLarge = allowExtraLarge || args.Contains("--large");
             if (args.Length < 4) throw new ArgumentException("apply-patch <path> <hash> <diffFile>. UsÃƒÂ¡ 'help' para ejemplos.");
@@ -224,6 +227,8 @@ namespace McpHost
 
                 static int CmdServeMcp(FileGateway gateway, string[] args)
         {
+            string exeDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+            McpConfig.Load(exeDir);
             // Default: expanded root so Codex can operate outside the repo when no --root is provided.
             string root = @"D:\Desarrollo";
 

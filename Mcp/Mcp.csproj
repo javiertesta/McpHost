@@ -45,16 +45,19 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Diff\UnifiedDiff.cs" />
-    <Compile Include="Diff\UnifiedDiffApplier.cs" />
     <Compile Include="Diff\UnifiedDiffParser.cs" />
     <Compile Include="Diff\UnifiedDiffSemanticValidator.cs" />
     <Compile Include="Diff\UnifiedDiffValidator.cs" />
     <Compile Include="EncodingDetector.cs" />
+    <Compile Include="ExternalPatchEngine.cs" />
     <Compile Include="FileGateway.cs" />
+    <Compile Include="GrepEngine.cs" />
     <Compile Include="FileSnapshot.cs" />
     <Compile Include="FileSnapshotWriter.cs" />
     <Compile Include="HashUtil.cs" />
+    <Compile Include="McpConfig.cs" />
     <Compile Include="NewLineUtil.cs" />
+    <Compile Include="OutlineEngine.cs" />
     <Compile Include="Server\DbConnectionResolver.cs" />
     <Compile Include="Server\DbConnectionInfo.cs" />
     <Compile Include="Server\DbCrypto.cs" />

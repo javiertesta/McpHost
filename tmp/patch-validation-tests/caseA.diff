@@ -1,0 +1,8 @@
+--- a/caseA.txt
++++ b/caseA.txt
+@@ -1,3 +1,3 @@
+ alpha
+-beta
++BETA
+ gamma
+\ No newline at end of file
