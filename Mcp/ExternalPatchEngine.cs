@@ -30,7 +30,10 @@ namespace McpHost.Core
                 // Escribir archivo temporal (LF, UTF-8 sin BOM)
                 File.WriteAllText(fileTmp, normalizedLfContent, utf8NoBom);
                 // Normalizar diff a LF (por si viene con CRLF desde el cliente)
-                File.WriteAllText(diffTmp, NormalizeToLf(diffText), utf8NoBom);
+                string normalizedDiff = NormalizeToLf(diffText);
+                // patch.exe (Git for Windows) es sensible al EOF sin newline en ciertos hunks.
+                if (!normalizedDiff.EndsWith("\n", StringComparison.Ordinal)) normalizedDiff += "\n";
+                File.WriteAllText(diffTmp, normalizedDiff, utf8NoBom);
 
                 // Armar argumentos
                 var argsList = new List<string>

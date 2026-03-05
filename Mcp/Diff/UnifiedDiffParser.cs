@@ -30,27 +30,34 @@ namespace McpHost.Diff
                 else if (raw.StartsWith("+++")) diff.NewFile = raw;
                 else if (raw.StartsWith("@@"))
                 {
-                    var m = HunkHeader.Match(raw);
-                    if (!m.Success)
+                    int startOriginal, lengthOriginal, startNew, lengthNew;
+                    bool normalizedLegacyHeader;
+                    bool headerOk = TryParseHunkHeader(raw, out startOriginal, out lengthOriginal, out startNew, out lengthNew, out normalizedLegacyHeader);
+
+                    if (!headerOk)
                     {
                         throw new PatchException(
                             "Hunk inválido",
                             errorCode: "invalid_hunk_header",
                             hunkIndex: diff.Hunks.Count + 1,
                             diffLineNumber: lineIndex,
-                            reason: "El encabezado del hunk no cumple el formato esperado.",
+                            reason: "El encabezado del hunk no cumple el formato esperado ni pudo normalizarse automáticamente.",
                             expectedFormat: "@@ -start[,count] +start[,count] @@",
                             problematicLine: Truncate(raw, 240));
                     }
 
                     current = new DiffHunk
                     {
-                        StartOriginal = int.Parse(m.Groups[1].Value),
-                        LengthOriginal = m.Groups[2].Success ? int.Parse(m.Groups[2].Value) : 1,
-                        StartNew = int.Parse(m.Groups[3].Value),
-                        LengthNew = m.Groups[4].Success ? int.Parse(m.Groups[4].Value) : 1
+                        StartOriginal = startOriginal,
+                        LengthOriginal = lengthOriginal,
+                        StartNew = startNew,
+                        LengthNew = lengthNew
                     };
 
+                    if (normalizedLegacyHeader)
+                    {
+                        diff.NormalizedHunkHeaders++;
+                    }
                     diff.Hunks.Add(current);
                 }
                 else if (current != null)
@@ -134,6 +141,50 @@ namespace McpHost.Diff
             }
 
             return diff;
+        }
+
+        static bool TryParseHunkHeader(
+            string raw,
+            out int startOriginal,
+            out int lengthOriginal,
+            out int startNew,
+            out int lengthNew,
+            out bool normalizedLegacyHeader)
+        {
+            var m = HunkHeader.Match(raw);
+            if (m.Success)
+            {
+                startOriginal = int.Parse(m.Groups[1].Value);
+                lengthOriginal = m.Groups[2].Success ? int.Parse(m.Groups[2].Value) : 1;
+                startNew = int.Parse(m.Groups[3].Value);
+                lengthNew = m.Groups[4].Success ? int.Parse(m.Groups[4].Value) : 1;
+                normalizedLegacyHeader = false;
+                return true;
+            }
+
+            if (LooksLikeLegacyHunkHeader(raw))
+            {
+                startOriginal = 1;
+                lengthOriginal = 0;
+                startNew = 1;
+                lengthNew = 0;
+                normalizedLegacyHeader = true;
+                return true;
+            }
+
+            startOriginal = lengthOriginal = startNew = lengthNew = 0;
+            normalizedLegacyHeader = false;
+            return false;
+        }
+
+        static bool LooksLikeLegacyHunkHeader(string raw)
+        {
+            string trimmed = (raw ?? string.Empty).Trim();
+            if (string.Equals(trimmed, "@@", StringComparison.Ordinal)) return true;
+            if (!trimmed.StartsWith("@@", StringComparison.Ordinal)) return false;
+            if (!trimmed.EndsWith("@@", StringComparison.Ordinal)) return false;
+            string body = trimmed.Substring(2, trimmed.Length - 4).Trim();
+            return body.Length > 0 && body.IndexOf('-') < 0 && body.IndexOf('+') < 0;
         }
 
         static void ValidateNoBom(string diffText)

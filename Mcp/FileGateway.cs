@@ -110,13 +110,15 @@ namespace McpHost.Core
                         inner: ex);
                 }
 
+                // Los hunks se aplican individualmente de forma transaccional.
+
                 if (parseOnly)
                 {
-                    ExternalPatchEngine.Validate(diffText, baseText);
+                    ApplyHunksTransactional(diff, baseText, parseOnly: true);
                     return;
                 }
 
-                string patched = ExternalPatchEngine.Apply(diffText, baseText);
+                string patched = ApplyHunksTransactional(diff, baseText, parseOnly: false);
 
                 if (allowExtraLarge)
                     WriteTimestampedBackup(snap);
@@ -186,6 +188,107 @@ namespace McpHost.Core
         {
             return text.Replace("\r\n", "\n").Replace("\r", "\n");
         }
+
+        static string ApplyHunksTransactional(UnifiedDiff diff, string baseText, bool parseOnly)
+        {
+            string workingText = baseText;
+            var failures = new List<string>();
+
+            for (int i = 0; i < diff.Hunks.Count; i++)
+            {
+                var hunk = diff.Hunks[i];
+                string oneHunkDiff = BuildCanonicalUnifiedDiff(diff, hunk);
+
+                try
+                {
+                    if (parseOnly)
+                        ExternalPatchEngine.Validate(oneHunkDiff, workingText);
+                    else
+                        workingText = ExternalPatchEngine.Apply(oneHunkDiff, workingText);
+                }
+                catch (PatchException ex)
+                {
+                    failures.Add(BuildHunkFailureMessage(i + 1, ex.Message));
+                }
+                catch (InvalidOperationException ex)
+                {
+                    failures.Add(BuildHunkFailureMessage(i + 1, ex.Message));
+                }
+            }
+
+            if (failures.Count > 0)
+                throw new PatchException(
+                    BuildTransactionalFailureMessage(failures, parseOnly),
+                    errorCode: "patch_apply_failed_multi_hunk",
+                    reason: "Fallaron uno o más hunks durante la aplicación transaccional.");
+
+            return workingText;
+        }
+
+
+        static string BuildHunkFailureMessage(int hunkIndex, string message)
+        {
+            string msg = string.IsNullOrWhiteSpace(message) ? "Error desconocido." : message.Trim();
+            return "Hunk " + hunkIndex + ": " + msg;
+        }
+
+        static string BuildTransactionalFailureMessage(List<string> failures, bool parseOnly)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine(parseOnly
+                ? "La validación transaccional por hunk detectó errores."
+                : "La aplicación transaccional por hunk detectó errores. No se escribió ningún cambio en disco.");
+            sb.AppendLine("Detalle de fallos:");
+            foreach (var failure in failures) sb.AppendLine("- " + failure);
+            return sb.ToString().TrimEnd();
+        }
+
+
+        static string BuildCanonicalUnifiedDiff(UnifiedDiff diff)
+        {
+            var sb = new StringBuilder();
+
+            if (!string.IsNullOrWhiteSpace(diff.OriginalFile))
+                sb.AppendLine(diff.OriginalFile.TrimEnd('\r', '\n'));
+            if (!string.IsNullOrWhiteSpace(diff.NewFile))
+                sb.AppendLine(diff.NewFile.TrimEnd('\r', '\n'));
+
+            foreach (var h in diff.Hunks)
+            {
+                sb.Append("@@ -")
+                  .Append(h.StartOriginal).Append(",").Append(h.LengthOriginal)
+                  .Append(" +")
+                  .Append(h.StartNew).Append(",").Append(h.LengthNew)
+                  .AppendLine(" @@");
+
+                foreach (var line in h.Lines)
+                    sb.AppendLine(line);
+            }
+
+            return sb.ToString();
+        }
+
+        static string BuildCanonicalUnifiedDiff(UnifiedDiff diff, DiffHunk hunk)
+        {
+            var sb = new StringBuilder();
+
+            if (!string.IsNullOrWhiteSpace(diff.OriginalFile))
+                sb.AppendLine(diff.OriginalFile.TrimEnd('\r', '\n'));
+            if (!string.IsNullOrWhiteSpace(diff.NewFile))
+                sb.AppendLine(diff.NewFile.TrimEnd('\r', '\n'));
+
+            sb.Append("@@ -")
+              .Append(hunk.StartOriginal).Append(",").Append(hunk.LengthOriginal)
+              .Append(" +")
+              .Append(hunk.StartNew).Append(",").Append(hunk.LengthNew)
+              .AppendLine(" @@");
+
+            foreach (var line in hunk.Lines)
+                sb.AppendLine(line);
+
+            return sb.ToString();
+        }
+
 
         static void WriteTimestampedBackup(FileSnapshot snap)
         {
