@@ -1,0 +1,10 @@
+--- a/mcp-repro-multi.txt
++++ b/mcp-repro-multi.txt
+@@ -1,2 +1,2 @@
+-l1
++L1
+ l2
+@@ -3,2 +3,2 @@
+ l3
+-l4
++L4

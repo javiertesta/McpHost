@@ -304,16 +304,11 @@ namespace McpHost.Diff
 
         static bool SameLine(string fileLine, string diffLine)
         {
-            // 1) Comparación estricta (pero ignorando trailing whitespace)
+            // Comparación estricta (ignorando solo trailing whitespace).
+            // Debe alinearse con patch.exe para evitar "valida pero no aplica".
             string a = (fileLine ?? "").TrimEnd(' ', '\t');
             string b = (diffLine ?? "").TrimEnd(' ', '\t');
-            if (a == b) return true;
-
-            // 2) Comparación tolerante: colapsar cualquier secuencia de espacios/tabs a un solo espacio.
-            // Esto reduce falsos negativos cuando Claude cambia indentación (tabs vs espacios) o espaciado.
-            string a2 = WhitespaceNormalizeUtil.NormalizeLineLoose(a);
-            string b2 = WhitespaceNormalizeUtil.NormalizeLineLoose(b);
-            return a2 == b2;
+            return a == b;
         }
     }
 }

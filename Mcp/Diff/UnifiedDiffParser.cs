@@ -81,13 +81,18 @@ namespace McpHost.Diff
                         char p = raw[0];
                         if (p != ' ' && p != '+' && p != '-')
                         {
+                            bool pareceApplyPatch = raw.StartsWith("*** ", StringComparison.Ordinal);
                             throw new PatchException(
                                 "Diff inválido: prefijo desconocido '" + p + "'.",
-                                errorCode: "invalid_hunk_line_prefix",
+                                errorCode: pareceApplyPatch ? "invalid_diff_wrapper_format" : "invalid_hunk_line_prefix",
                                 hunkIndex: diff.Hunks.Count,
                                 diffLineNumber: lineIndex,
-                                reason: "Prefijo de línea inválido en hunk.",
-                                expectedFormat: "Cada línea del hunk debe iniciar con ' ', '+' o '-'.",
+                                reason: pareceApplyPatch
+                                    ? "Se detectó formato tipo apply_patch (*** Begin Patch / *** Update File / *** End Patch), pero esta herramienta espera unified diff puro."
+                                    : "Prefijo de línea inválido en hunk.",
+                                expectedFormat: pareceApplyPatch
+                                    ? "Usar unified diff puro con encabezado @@ ... @@ y líneas que empiecen con ' ', '+' o '-'."
+                                    : "Cada línea del hunk debe iniciar con ' ', '+' o '-'.",
                                 problematicLine: Truncate(raw, 240));
                         }
 

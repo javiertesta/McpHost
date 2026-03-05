@@ -162,7 +162,7 @@ namespace McpHost.Core
                 message.StartsWith("Hunk inválido", StringComparison.OrdinalIgnoreCase))
             {
                 return message + "\n\n" +
-                       "DIFF RECHAZADO: Comprobá que el formato utilizado sea el admitido por patch.exe (el que viene incluído con VS Code)";
+                       "DIFF RECHAZADO: Comprobá que el formato utilizado sea unified diff compatible con patch.exe (Git for Windows).";
             }
 
             if (message.StartsWith("Patch vacío", StringComparison.OrdinalIgnoreCase) ||
