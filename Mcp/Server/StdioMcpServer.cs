@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 using System.Web.Script.Serialization;
+using McpHost.Core;
 
 namespace McpHost.Server
 {
@@ -84,6 +85,7 @@ namespace McpHost.Server
             catch (Exception ex)
             {
                 Console.Error.WriteLine("MCP error processing message: " + ex.Message);
+                McpErrorLogger.LogError("process_message_exception", null, ex.Message, ex, null, null, null);
                 return MakeError(null, -32700, "Parse error: " + ex.Message);
             }
         }
@@ -146,11 +148,25 @@ namespace McpHost.Server
                 if (toolResult.IsError) result["isError"] = true;
                 if (toolResult.IsError && toolResult.ErrorData != null && toolResult.ErrorData.Count > 0)
                     result["error"] = toolResult.ErrorData;
+
+                if (toolResult.IsError)
+                {
+                    string errorText = ExtractFirstTextContent(toolResult.Content) ?? "Tool returned isError=true";
+                    McpErrorLogger.LogError(
+                        "tool_result_error",
+                        toolName,
+                        errorText,
+                        null,
+                        toolResult.ErrorData,
+                        arguments,
+                        null);
+                }
                 return MakeResult(id, result);
             }
             catch (Exception ex)
             {
                 Console.Error.WriteLine("[" + DateTime.Now.ToString("HH:mm:ss") + "] mcp error: " + toolName + " (" + sw.ElapsedMilliseconds + "ms): " + ex.Message);
+                McpErrorLogger.LogError("tool_exception", toolName, ex.Message, ex, null, arguments, null);
 
                 var content = new List<object>
                 {
@@ -206,6 +222,12 @@ namespace McpHost.Server
 
         string MakeError(object id, int code, string message)
         {
+            McpErrorLogger.LogError(
+                "jsonrpc_error",
+                null,
+                message,
+                null,
+                new Dictionary<string, object> { { "jsonrpc_code", code } }, null, null);
             var resp = new Dictionary<string, object>
             {
                 { "jsonrpc", "2.0" },
@@ -218,6 +240,24 @@ namespace McpHost.Server
                 }
             };
             return _json.Serialize(resp);
+        }
+
+        static string ExtractFirstTextContent(List<object> content)
+        {
+            if (content == null) return null;
+            foreach (object item in content)
+            {
+                var obj = item as Dictionary<string, object>;
+                if (obj == null) continue;
+
+                object typeObj;
+                object textObj;
+                if (!obj.TryGetValue("type", out typeObj)) continue;
+                if (!obj.TryGetValue("text", out textObj)) continue;
+
+                if ((typeObj as string) == "text") return textObj as string;
+            }
+            return null;
         }
     }
 }

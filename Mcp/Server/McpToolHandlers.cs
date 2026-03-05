@@ -644,7 +644,37 @@ namespace McpHost.Server
             }
             catch (PatchException ex)
             {
-                return ErrorResult(BuildPatchErrorMessage(ex), ex.ToErrorData());
+                var errorData = ex.ToErrorData();
+                string incidentDir = McpErrorLogger.CreateIncidentDirectory("file_apply_patch_only");
+
+                var refs = new Dictionary<string, string>();
+                refs["incident_dir"] = incidentDir;
+                refs["target_path"] = resolved;
+                refs["parse_only"] = parseOnly ? "true" : "false";
+
+                string originalPath = McpErrorLogger.SaveBytesFile(incidentDir, "archivo_original_a_parchar.bin", snap.OriginalBytes);
+                if (!string.IsNullOrEmpty(originalPath)) refs["archivo_original"] = originalPath;
+
+                string originalTextPath = McpErrorLogger.SaveTextFile(incidentDir, "archivo_original_a_parchar.txt", snap.Text);
+                if (!string.IsNullOrEmpty(originalTextPath)) refs["archivo_original_texto"] = originalTextPath;
+
+                string diffPath = McpErrorLogger.SaveTextFile(incidentDir, "diff_recibido.diff", diff);
+                if (!string.IsNullOrEmpty(diffPath)) refs["diff_recibido"] = diffPath;
+
+                if (!string.IsNullOrEmpty(ex.EvidenceDirectory))
+                    refs["patch_engine_evidence"] = ex.EvidenceDirectory;
+
+                string metaPath = McpErrorLogger.SaveTextFile(
+                    incidentDir,
+                    "metadata.txt",
+                    "path=" + resolved + "\n" +
+                    "hash_expected=" + hash + "\n" +
+                    "hash_strict=" + snap.Sha256 + "\n" +
+                    "hash_whitespace_normalized=" + snap.Sha256NormalizedWhitespace + "\n" +
+                    "parse_only=" + (parseOnly ? "true" : "false") + "\n");
+                if (!string.IsNullOrEmpty(metaPath)) refs["metadata"] = metaPath;
+
+                return ErrorResult(BuildPatchErrorMessage(ex), MergeErrorData(errorData, refs));
             }
 
             return new ToolResult
@@ -888,6 +918,21 @@ namespace McpHost.Server
                 Content = TextContent(message),
                 ErrorData = errorData
             };
+        }
+
+        static Dictionary<string, object> MergeErrorData(Dictionary<string, object> left, Dictionary<string, string> refs)
+        {
+            var merged = left != null
+                ? new Dictionary<string, object>(left)
+                : new Dictionary<string, object>();
+
+            if (refs != null && refs.Count > 0)
+            {
+                var refsObj = new Dictionary<string, object>();
+                foreach (var kv in refs) refsObj[kv.Key] = kv.Value;
+                merged["error_files"] = refsObj;
+            }
+            return merged;
         }
 
         static string DescribeNewline(string nl)

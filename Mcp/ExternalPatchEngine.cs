@@ -27,6 +27,7 @@ namespace McpHost.Core
 
             try
             {
+                string args = null;
                 // Escribir archivo temporal (LF, UTF-8 sin BOM)
                 File.WriteAllText(fileTmp, normalizedLfContent, utf8NoBom);
                 // Normalizar diff a LF (por si viene con CRLF desde el cliente)
@@ -45,7 +46,7 @@ namespace McpHost.Core
                 argsList.Add(QuoteArg(diffTmp));
                 argsList.Add(QuoteArg(fileTmp));
 
-                string args = string.Join(" ", argsList);
+                args = string.Join(" ", argsList);
 
                 // Ejecutar patch.exe
                 var psi = new ProcessStartInfo
@@ -72,10 +73,26 @@ namespace McpHost.Core
                 if (exitCode != 0)
                 {
                     string output = (stdout + "\n" + stderr).Trim();
+                    string incidentDir = McpErrorLogger.CreateIncidentDirectory("patch_engine");
+                    McpErrorLogger.SaveBytesFile(incidentDir, "archivo_original.tmp", File.ReadAllBytes(fileTmp));
+                    McpErrorLogger.SaveTextFile(incidentDir, "archivo_temp_enviado_a_patch.tmp", File.ReadAllText(fileTmp, utf8NoBom));
+                    McpErrorLogger.SaveTextFile(incidentDir, "diff_enviado_a_patch.diff", File.ReadAllText(diffTmp, utf8NoBom));
+                    McpErrorLogger.SaveTextFile(
+                        incidentDir,
+                        "patch_stdout_stderr.txt",
+                        "exit_code=" + exitCode + "\n" +
+                        "patch_exe=" + patchExe + "\n" +
+                        "args=" + (args ?? string.Empty) + "\n\n" +
+                        output);
+
+                    if (File.Exists(fileTmp + ".rej"))
+                        McpErrorLogger.SaveTextFile(incidentDir, "archivo_temp.rej", File.ReadAllText(fileTmp + ".rej", utf8NoBom));
+
                     throw new PatchException(
                         $"patch.exe falló (exit {exitCode}).\n{output}",
                         errorCode: "patch_apply_failed",
-                        reason: output);
+                        reason: output,
+                        evidenceDirectory: incidentDir);
                 }
 
                 if (dryRun) return null;

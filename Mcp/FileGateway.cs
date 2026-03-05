@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
 using System.Text;
+using System.Web.Script.Serialization;
 
 namespace McpHost.Core
 {
@@ -146,6 +147,7 @@ namespace McpHost.Core
                     ex.Reason,
                     ex.ExpectedFormat,
                     ex.ProblematicLine,
+                    ex.EvidenceDirectory,
                     ex);
             }
             catch (InvalidOperationException ex)
@@ -327,6 +329,7 @@ namespace McpHost.Core
         public string Reason { get; private set; }
         public string ExpectedFormat { get; private set; }
         public string ProblematicLine { get; private set; }
+        public string EvidenceDirectory { get; private set; }
 
         public PatchException(
             string message,
@@ -336,6 +339,7 @@ namespace McpHost.Core
             string reason = null,
             string expectedFormat = null,
             string problematicLine = null,
+            string evidenceDirectory = null,
             Exception inner = null)
             : base(message, inner)
         {
@@ -344,6 +348,7 @@ namespace McpHost.Core
             DiffLineNumber = diffLineNumber;
             Reason = reason;
             ExpectedFormat = expectedFormat;
+            EvidenceDirectory = evidenceDirectory;
             ProblematicLine = problematicLine;
         }
 
@@ -356,7 +361,137 @@ namespace McpHost.Core
             if (!string.IsNullOrEmpty(Reason)) data["reason"] = Reason;
             if (!string.IsNullOrEmpty(ExpectedFormat)) data["expected_format"] = ExpectedFormat;
             if (!string.IsNullOrEmpty(ProblematicLine)) data["problematic_line"] = ProblematicLine;
+            if (!string.IsNullOrEmpty(EvidenceDirectory)) data["evidence_directory"] = EvidenceDirectory;
             return data;
+        }
+    }
+
+    static class McpErrorLogger
+    {
+        const long MaxLogSizeBytes = 100L * 1024L * 1024L;
+        static readonly TimeSpan Retention = TimeSpan.FromDays(60);
+        static readonly object Sync = new object();
+        static readonly UTF8Encoding Utf8NoBom = new UTF8Encoding(false);
+        static readonly JavaScriptSerializer Json = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
+        static DateTime _lastCleanupUtc = DateTime.MinValue;
+
+        static string BaseDir => AppDomain.CurrentDomain.BaseDirectory;
+        static string IncidentsDir => Path.Combine(BaseDir, "erroresmcp");
+        static string LogPath => Path.Combine(BaseDir, "erroresmcp.log");
+
+        public static string CreateIncidentDirectory(string area)
+        {
+            lock (Sync)
+            {
+                EnsureMaintenanceLocked();
+                string stamp = DateTime.Now.ToString("yyyyMMdd_HHmmss_fff");
+                string id = Guid.NewGuid().ToString("N").Substring(0, 8);
+                string safeArea = SanitizeFileName(string.IsNullOrWhiteSpace(area) ? "mcp" : area);
+                string dir = Path.Combine(IncidentsDir, stamp + "_" + id + "_" + safeArea);
+                Directory.CreateDirectory(dir);
+                return dir;
+            }
+        }
+
+        public static string SaveTextFile(string incidentDir, string fileName, string content)
+        {
+            if (string.IsNullOrWhiteSpace(incidentDir)) return null;
+            try
+            {
+                Directory.CreateDirectory(incidentDir);
+                string path = Path.Combine(incidentDir, SanitizeFileName(fileName));
+                File.WriteAllText(path, content ?? string.Empty, Utf8NoBom);
+                return path;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        public static string SaveBytesFile(string incidentDir, string fileName, byte[] content)
+        {
+            if (string.IsNullOrWhiteSpace(incidentDir)) return null;
+            try
+            {
+                Directory.CreateDirectory(incidentDir);
+                string path = Path.Combine(incidentDir, SanitizeFileName(fileName));
+                File.WriteAllBytes(path, content ?? new byte[0]);
+                return path;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        public static void LogError(string stage, string toolName, string message, Exception ex, Dictionary<string, object> errorData, Dictionary<string, object> args, Dictionary<string, string> fileRefs)
+        {
+            lock (Sync)
+            {
+                EnsureMaintenanceLocked();
+
+                var row = new Dictionary<string, object>
+                {
+                    { "timestamp", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") },
+                    { "stage", stage ?? "unknown" },
+                    { "tool", toolName ?? "(none)" },
+                    { "message", message ?? string.Empty },
+                    { "error_data", errorData ?? new Dictionary<string, object>() },
+                    { "arguments", args ?? new Dictionary<string, object>() },
+                    { "files", fileRefs ?? new Dictionary<string, string>() }
+                };
+
+                if (ex != null) row["exception"] = ex.ToString();
+
+                string line = Json.Serialize(row) + Environment.NewLine;
+                File.AppendAllText(LogPath, line, Utf8NoBom);
+            }
+        }
+
+        static void EnsureMaintenanceLocked()
+        {
+            Directory.CreateDirectory(IncidentsDir);
+            TruncateLogIfNeeded();
+
+            DateTime now = DateTime.UtcNow;
+            if ((now - _lastCleanupUtc) < TimeSpan.FromMinutes(15)) return;
+            _lastCleanupUtc = now;
+
+            foreach (string dir in Directory.EnumerateDirectories(IncidentsDir))
+            {
+                try
+                {
+                    var info = new DirectoryInfo(dir);
+                    DateTime last = info.LastWriteTimeUtc;
+                    if (last == DateTime.MinValue) last = info.CreationTimeUtc;
+                    if (last != DateTime.MinValue && (now - last) > Retention)
+                        info.Delete(true);
+                }
+                catch { }
+            }
+        }
+
+        static void TruncateLogIfNeeded()
+        {
+            try
+            {
+                if (!File.Exists(LogPath)) return;
+                var info = new FileInfo(LogPath);
+                if (info.Length <= MaxLogSizeBytes) return;
+                File.WriteAllText(LogPath, string.Empty, Utf8NoBom);
+            }
+            catch { }
+        }
+
+        static string SanitizeFileName(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return "file";
+            char[] invalid = Path.GetInvalidFileNameChars();
+            var sb = new StringBuilder(name.Length);
+            foreach (char c in name)
+                sb.Append(Array.IndexOf(invalid, c) >= 0 ? '_' : c);
+            return sb.ToString();
         }
     }
 }
