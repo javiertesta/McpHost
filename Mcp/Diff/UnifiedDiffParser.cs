@@ -127,14 +127,9 @@ namespace McpHost.Diff
 
                 if (originalConsumed != h.LengthOriginal || newProduced != h.LengthNew)
                 {
-                    throw new PatchException(
-                        "Hunk inválido: los conteos del encabezado no coinciden con las líneas del hunk.",
-                        errorCode: "hunk_length_mismatch",
-                        hunkIndex: i + 1,
-                        reason:
-                            $"Header: -{h.StartOriginal},{h.LengthOriginal} +{h.StartNew},{h.LengthNew}. " +
-                            $"Contenido: original={originalConsumed}, nuevo={newProduced}.",
-                        expectedFormat: "@@ -start[,count] +start[,count] @@ con counts consistentes con líneas ' ', '-', '+'.");
+                    h.LengthOriginal = originalConsumed;
+                    h.LengthNew = newProduced;
+                    diff.NormalizedHunkHeaders++;
                 }
             }
 

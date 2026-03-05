@@ -6,6 +6,7 @@ namespace McpHost.Diff
     {
         public string OriginalFile { get; set; }
         public string NewFile { get; set; }
+        public int NormalizedHunkHeaders { get; set; }
         public List<DiffHunk> Hunks { get; } = new List<DiffHunk>();
     }
 

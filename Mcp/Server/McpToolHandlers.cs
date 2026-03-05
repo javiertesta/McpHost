@@ -644,7 +644,7 @@ namespace McpHost.Server
             }
             catch (PatchException ex)
             {
-                return ErrorResult(ex.Message, ex.ToErrorData());
+                return ErrorResult(BuildPatchErrorMessage(ex), ex.ToErrorData());
             }
 
             return new ToolResult
@@ -824,6 +824,24 @@ namespace McpHost.Server
         }
 
         // --- helpers ---
+
+        static string BuildPatchErrorMessage(PatchException ex)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine(ex.Message ?? "Error aplicando patch.");
+
+            if (!string.IsNullOrEmpty(ex.ErrorCode)) sb.AppendLine("error_code: " + ex.ErrorCode);
+            if (ex.HunkIndex.HasValue) sb.AppendLine("hunk_index: " + ex.HunkIndex.Value);
+            if (ex.DiffLineNumber.HasValue) sb.AppendLine("diff_line_number: " + ex.DiffLineNumber.Value);
+            if (!string.IsNullOrEmpty(ex.Reason)) sb.AppendLine("reason: " + ex.Reason);
+            if (!string.IsNullOrEmpty(ex.ExpectedFormat)) sb.AppendLine("expected_format: " + ex.ExpectedFormat);
+            if (!string.IsNullOrEmpty(ex.ProblematicLine)) sb.AppendLine("problematic_line: " + ex.ProblematicLine);
+
+            if (!string.IsNullOrEmpty(ex.ErrorCode) && ex.ErrorCode.Equals("hunk_length_mismatch", StringComparison.OrdinalIgnoreCase))
+                sb.AppendLine("nota: el parser del MCP ahora normaliza counts de header cuando puede, pero este error puede aparecer desde otras validaciones posteriores.");
+
+            return sb.ToString().TrimEnd();
+        }
 
         static string GetStringArg(Dictionary<string, object> args, string key)
         {
