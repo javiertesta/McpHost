@@ -97,28 +97,39 @@ namespace McpHost.Core
 
                 UnifiedDiffValidator.Validate(diff, baseText.Split('\n').Length, maxTouchedLines);
 
+                string canonicalDiff = BuildCanonicalUnifiedDiff(diff);
+
                 try
                 {
                     UnifiedDiffSemanticValidator.ValidateAgainstText(diff, baseText);
                 }
                 catch (InvalidOperationException ex)
                 {
-                    throw new PatchException(
-                        ex.Message,
-                        errorCode: "patch_semantic_mismatch",
-                        reason: ex.Message,
-                        inner: ex);
+                    // Fallback: si patch.exe valida el diff completo, no bloquear por falso negativo
+                    // del validador semántico interno.
+                    try
+                    {
+                        ExternalPatchEngine.Validate(canonicalDiff, baseText);
+                    }
+                    catch
+                    {
+                        throw new PatchException(
+                            ex.Message,
+                            errorCode: "patch_semantic_mismatch",
+                            reason: ex.Message,
+                            inner: ex);
+                    }
                 }
 
                 // Los hunks se aplican individualmente de forma transaccional.
 
                 if (parseOnly)
                 {
-                    ApplyHunksTransactional(diff, baseText, parseOnly: true);
+                    ExternalPatchEngine.Validate(canonicalDiff, baseText);
                     return;
                 }
 
-                string patched = ApplyHunksTransactional(diff, baseText, parseOnly: false);
+                string patched = ExternalPatchEngine.Apply(canonicalDiff, baseText);
 
                 if (allowExtraLarge)
                     WriteTimestampedBackup(snap);
