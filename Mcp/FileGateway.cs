@@ -98,11 +98,16 @@ namespace McpHost.Core
 
                 UnifiedDiffValidator.Validate(diff, baseText.Split('\n').Length, maxTouchedLines);
 
-                string canonicalDiff = BuildCanonicalUnifiedDiff(diff);
+                // Diff canónico con las posiciones originales del cliente. Se usa en el fallback
+                // con patch.exe en caso de que el validador semántico lance, dado que el objeto
+                // diff puede quedar en estado inconsistente si el validador falló a mitad.
+                string canonicalDiffFallback = BuildCanonicalUnifiedDiff(diff);
+                bool semanticValidationPassed = false;
 
                 try
                 {
                     UnifiedDiffSemanticValidator.ValidateAgainstText(diff, baseText);
+                    semanticValidationPassed = true;
                 }
                 catch (InvalidOperationException ex)
                 {
@@ -110,7 +115,7 @@ namespace McpHost.Core
                     // del validador semántico interno.
                     try
                     {
-                        ExternalPatchEngine.Validate(canonicalDiff, baseText);
+                        ExternalPatchEngine.Validate(canonicalDiffFallback, baseText);
                     }
                     catch
                     {
@@ -122,7 +127,11 @@ namespace McpHost.Core
                     }
                 }
 
-                // Los hunks se aplican individualmente de forma transaccional.
+                // Si el validador semántico reubicó hunks, reconstruir con posiciones corregidas.
+                // Si falló pero patch.exe aceptó el diff, usar posiciones originales.
+                string canonicalDiff = semanticValidationPassed
+                    ? BuildCanonicalUnifiedDiff(diff)
+                    : canonicalDiffFallback;
 
                 if (parseOnly)
                 {
@@ -194,6 +203,14 @@ namespace McpHost.Core
                        "CLAUDE: re-leé el bloque exacto y regenerá el diff preservando tabs y sin envolver líneas.";
             }
 
+            if (message.StartsWith("patch.exe falló", StringComparison.OrdinalIgnoreCase))
+            {
+                return message + "\n\n" +
+                       newlineNote + "\n" +
+                       "Si el mensaje incluye 'Hunk #... FAILED', el problema suele ser contexto incorrecto en el diff (no solo offset de líneas).\n" +
+                       "CLAUDE: usar parse_only=true para preflight y luego regenerar el patch con hunks más chicos y contexto exacto.";
+            }
+
             return message;
         }
 
@@ -201,61 +218,6 @@ namespace McpHost.Core
         {
             return text.Replace("\r\n", "\n").Replace("\r", "\n");
         }
-
-        static string ApplyHunksTransactional(UnifiedDiff diff, string baseText, bool parseOnly)
-        {
-            string workingText = baseText;
-            var failures = new List<string>();
-
-            for (int i = 0; i < diff.Hunks.Count; i++)
-            {
-                var hunk = diff.Hunks[i];
-                string oneHunkDiff = BuildCanonicalUnifiedDiff(diff, hunk);
-
-                try
-                {
-                    if (parseOnly)
-                        ExternalPatchEngine.Validate(oneHunkDiff, workingText);
-                    else
-                        workingText = ExternalPatchEngine.Apply(oneHunkDiff, workingText);
-                }
-                catch (PatchException ex)
-                {
-                    failures.Add(BuildHunkFailureMessage(i + 1, ex.Message));
-                }
-                catch (InvalidOperationException ex)
-                {
-                    failures.Add(BuildHunkFailureMessage(i + 1, ex.Message));
-                }
-            }
-
-            if (failures.Count > 0)
-                throw new PatchException(
-                    BuildTransactionalFailureMessage(failures, parseOnly),
-                    errorCode: "patch_apply_failed_multi_hunk",
-                    reason: "Fallaron uno o más hunks durante la aplicación transaccional.");
-
-            return workingText;
-        }
-
-
-        static string BuildHunkFailureMessage(int hunkIndex, string message)
-        {
-            string msg = string.IsNullOrWhiteSpace(message) ? "Error desconocido." : message.Trim();
-            return "Hunk " + hunkIndex + ": " + msg;
-        }
-
-        static string BuildTransactionalFailureMessage(List<string> failures, bool parseOnly)
-        {
-            var sb = new StringBuilder();
-            sb.AppendLine(parseOnly
-                ? "La validación transaccional por hunk detectó errores."
-                : "La aplicación transaccional por hunk detectó errores. No se escribió ningún cambio en disco.");
-            sb.AppendLine("Detalle de fallos:");
-            foreach (var failure in failures) sb.AppendLine("- " + failure);
-            return sb.ToString().TrimEnd();
-        }
-
 
         static string BuildCanonicalUnifiedDiff(UnifiedDiff diff)
         {
@@ -280,28 +242,6 @@ namespace McpHost.Core
 
             return sb.ToString();
         }
-
-        static string BuildCanonicalUnifiedDiff(UnifiedDiff diff, DiffHunk hunk)
-        {
-            var sb = new StringBuilder();
-
-            if (!string.IsNullOrWhiteSpace(diff.OriginalFile))
-                sb.AppendLine(diff.OriginalFile.TrimEnd('\r', '\n'));
-            if (!string.IsNullOrWhiteSpace(diff.NewFile))
-                sb.AppendLine(diff.NewFile.TrimEnd('\r', '\n'));
-
-            sb.Append("@@ -")
-              .Append(hunk.StartOriginal).Append(",").Append(hunk.LengthOriginal)
-              .Append(" +")
-              .Append(hunk.StartNew).Append(",").Append(hunk.LengthNew)
-              .AppendLine(" @@");
-
-            foreach (var line in hunk.Lines)
-                sb.AppendLine(line);
-
-            return sb.ToString();
-        }
-
 
         static void WriteTimestampedBackup(FileSnapshot snap)
         {

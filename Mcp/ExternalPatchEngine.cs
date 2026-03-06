@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace McpHost.Core
 {
@@ -73,6 +74,7 @@ namespace McpHost.Core
                 if (exitCode != 0)
                 {
                     string output = (stdout + "\n" + stderr).Trim();
+                    string hunkSummary = BuildHunkFailuresSummary(output);
                     string incidentDir = McpErrorLogger.CreateIncidentDirectory("patch_engine");
                     McpErrorLogger.SaveBytesFile(incidentDir, "archivo_original.tmp", File.ReadAllBytes(fileTmp));
                     McpErrorLogger.SaveTextFile(incidentDir, "archivo_temp_enviado_a_patch.tmp", File.ReadAllText(fileTmp, utf8NoBom));
@@ -83,15 +85,21 @@ namespace McpHost.Core
                         "exit_code=" + exitCode + "\n" +
                         "patch_exe=" + patchExe + "\n" +
                         "args=" + (args ?? string.Empty) + "\n\n" +
-                        output);
+                        output +
+                        (string.IsNullOrWhiteSpace(hunkSummary) ? string.Empty : ("\n\n" + hunkSummary)));
+
+                    if (!string.IsNullOrWhiteSpace(hunkSummary))
+                        McpErrorLogger.SaveTextFile(incidentDir, "diagnostico_hunks.txt", hunkSummary);
 
                     if (File.Exists(fileTmp + ".rej"))
                         McpErrorLogger.SaveTextFile(incidentDir, "archivo_temp.rej", File.ReadAllText(fileTmp + ".rej", utf8NoBom));
 
+                    string outputConDiagnostico = output + (string.IsNullOrWhiteSpace(hunkSummary) ? string.Empty : ("\n\n" + hunkSummary));
+
                     throw new PatchException(
-                        $"patch.exe falló (exit {exitCode}).\n{output}",
+                        $"patch.exe falló (exit {exitCode}).\n{outputConDiagnostico}",
                         errorCode: "patch_apply_failed",
-                        reason: output,
+                        reason: outputConDiagnostico,
                         evidenceDirectory: incidentDir);
                 }
 
@@ -112,6 +120,35 @@ namespace McpHost.Core
 
         static string QuoteArg(string path)
             => "\"" + path.Replace("\"", "\\\"") + "\"";
+
+        static string BuildHunkFailuresSummary(string patchOutput)
+        {
+            if (string.IsNullOrWhiteSpace(patchOutput)) return null;
+
+            var matches = Regex.Matches(
+                patchOutput,
+                @"Hunk\s+#(?<h>\d+)\s+FAILED\s+at\s+(?<l>\d+)\.",
+                RegexOptions.IgnoreCase);
+
+            if (matches == null || matches.Count == 0) return null;
+
+            var parts = new List<string>();
+            foreach (Match m in matches)
+            {
+                string h = m.Groups["h"].Value;
+                string l = m.Groups["l"].Value;
+                if (!string.IsNullOrWhiteSpace(h) && !string.IsNullOrWhiteSpace(l))
+                    parts.Add("hunk " + h + " (línea aprox. " + l + ")");
+            }
+
+            if (parts.Count == 0) return null;
+
+            return
+                "Diagnóstico automático:\n" +
+                "- patch.exe detectó fallos en " + parts.Count + " hunk(s): " + string.Join(", ", parts) + ".\n" +
+                "- Esto suele indicar que el contexto del diff no coincide exactamente con el archivo (no solo desplazamiento de línea).\n" +
+                "- Recomendación: re-leer rangos exactos y regenerar el diff en hunks más pequeños, o validar primero con parse_only=true.";
+        }
 
         static void TryDelete(string path)
         {

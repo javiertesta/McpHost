@@ -661,6 +661,9 @@ namespace McpHost.Server
                 string diffPath = McpErrorLogger.SaveTextFile(incidentDir, "diff_recibido.diff", diff);
                 if (!string.IsNullOrEmpty(diffPath)) refs["diff_recibido"] = diffPath;
 
+                string errorMsgPath = McpErrorLogger.SaveTextFile(incidentDir, "error_message.txt", ex.Message);
+                if (!string.IsNullOrEmpty(errorMsgPath)) refs["error_message"] = errorMsgPath;
+
                 if (!string.IsNullOrEmpty(ex.EvidenceDirectory))
                     refs["patch_engine_evidence"] = ex.EvidenceDirectory;
 
@@ -780,13 +783,18 @@ namespace McpHost.Server
             int count = 0;
             bool truncated = false;
 
-            foreach (string fullPath in Directory.EnumerateFiles(resolved, pattern, SearchOption.AllDirectories))
+            string patternNormalized = NormalizeGlobPattern(pattern);
+
+            foreach (string fullPath in Directory.EnumerateFiles(resolved, "*", SearchOption.AllDirectories))
             {
                 string relative = GetRelativePath(resolved, fullPath);
                 if (IsDeniedForResources(relative)) continue;
 
+                string relativeUnix = relative.Replace('\\', '/');
+                if (!MatchesGlobPath(relativeUnix, patternNormalized)) continue;
+
                 if (count >= maxFiles) { truncated = true; break; }
-                sb.AppendLine(relative.Replace('\\', '/'));
+                sb.AppendLine(relativeUnix);
                 count++;
             }
 
@@ -942,6 +950,74 @@ namespace McpHost.Server
             if (nl == "\r") return "CR";
             return "CRLF";
         }
+
+        static string NormalizeGlobPattern(string pattern)
+        {
+            string p = string.IsNullOrWhiteSpace(pattern) ? "*" : pattern.Trim();
+            p = p.Replace('\\', '/');
+            while (p.StartsWith("./", StringComparison.Ordinal)) p = p.Substring(2);
+            while (p.Contains("//")) p = p.Replace("//", "/");
+            return p;
+        }
+
+        static bool MatchesGlobPath(string relativeUnixPath, string pattern)
+        {
+            if (string.IsNullOrEmpty(pattern) || pattern == "*") return true;
+
+            string[] pathSegments = (relativeUnixPath ?? string.Empty).Split('/');
+            string[] patternSegments = pattern.Split('/');
+            return MatchSegments(pathSegments, 0, patternSegments, 0);
+        }
+
+        static bool MatchSegments(string[] path, int pathIndex, string[] pattern, int patternIndex)
+        {
+            while (patternIndex < pattern.Length && pathIndex < path.Length)
+            {
+                string token = pattern[patternIndex];
+                if (token == "**")
+                {
+                    while (patternIndex + 1 < pattern.Length && pattern[patternIndex + 1] == "**")
+                        patternIndex++;
+
+                    if (patternIndex == pattern.Length - 1) return true;
+
+                    for (int i = pathIndex; i <= path.Length; i++)
+                    {
+                        if (MatchSegments(path, i, pattern, patternIndex + 1)) return true;
+                    }
+
+                    return false;
+                }
+
+                if (!MatchSegment(path[pathIndex], token)) return false;
+
+                pathIndex++;
+                patternIndex++;
+            }
+
+            while (patternIndex < pattern.Length && pattern[patternIndex] == "**") patternIndex++;
+            return pathIndex == path.Length && patternIndex == pattern.Length;
+        }
+
+        static bool MatchSegment(string text, string pattern)
+        {
+            int t = 0;
+            int p = 0;
+            int star = -1;
+            int match = 0;
+
+            while (t < text.Length)
+            {
+                if (p < pattern.Length && (pattern[p] == '?' || pattern[p] == text[t])) { t++; p++; continue; }
+                if (p < pattern.Length && pattern[p] == '*') { star = p++; match = t; continue; }
+                if (star != -1) { p = star + 1; t = ++match; continue; }
+                return false;
+            }
+
+            while (p < pattern.Length && pattern[p] == '*') p++;
+            return p == pattern.Length;
+        }
+
         static IEnumerable<string> EnumerateFilesSkipDenied(string dir)
         {
             var queue = new Queue<string>();
