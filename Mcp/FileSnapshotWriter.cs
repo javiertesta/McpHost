@@ -22,16 +22,30 @@ namespace McpHost.Core
             // 2) Volver a newline original del archivo
             string finalText = ConvertLfToNewline(lfText, snapshot.NewLine);
 
+            // 2.1) Clonar encoding en modo estricto: sin reemplazos silenciosos por '?'
+            Encoding strictEncoding = CloneWithStrictFallback(snapshot.Encoding);
+
             // 3) Texto -> bytes con el encoding original (sin BOM todavía)
-            byte[] payloadBytes = snapshot.Encoding.GetBytes(finalText);
+            byte[] payloadBytes;
+            try
+            {
+                payloadBytes = strictEncoding.GetBytes(finalText);
+            }
+            catch (EncoderFallbackException ex)
+            {
+                throw new InvalidOperationException(
+                    "El texto contiene caracteres no representables en el encoding original del archivo ('" + snapshot.Encoding.WebName + "'). " +
+                    "Se aborta para evitar reemplazos silenciosos por '?'.",
+                    ex);
+            }
 
             // 4) Reinsertar BOM si el archivo original lo tenía
             byte[] finalBytes = snapshot.HasBom
-                ? PrependPreamble(snapshot.Encoding, payloadBytes)
+                ? PrependPreamble(strictEncoding, payloadBytes)
                 : payloadBytes;
 
             // 5) Roundtrip check: bytes -> texto (saltando BOM si corresponde) y comparar
-            string decoded = DecodeBytesRespectingBom(snapshot.Encoding, finalBytes, snapshot.HasBom);
+            string decoded = DecodeBytesRespectingBom(strictEncoding, finalBytes, snapshot.HasBom);
             if (!StringEqualsOrdinal(decoded, finalText))
                 throw new InvalidOperationException(
                     "Roundtrip falló: el texto no puede ser re-codificado sin pérdida con el encoding original."
@@ -42,6 +56,17 @@ namespace McpHost.Core
 
             // 7) Hash del resultado (sobre bytes finales)
             return ComputeSha256(finalBytes);
+        }
+
+        static Encoding CloneWithStrictFallback(Encoding enc)
+        {
+            if (enc == null) throw new ArgumentNullException("enc");
+
+            var strict = (Encoding)enc.Clone();
+            strict.EncoderFallback = EncoderFallback.ExceptionFallback;
+            strict.DecoderFallback = DecoderFallback.ExceptionFallback;
+
+            return strict;
         }
 
         // ---------------- Helpers ----------------
