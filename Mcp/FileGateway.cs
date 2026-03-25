@@ -365,7 +365,7 @@ namespace McpHost.Core
             }
         }
 
-        public static void LogError(string stage, string toolName, string message, Exception ex, Dictionary<string, object> errorData, Dictionary<string, object> args, Dictionary<string, string> fileRefs)
+        public static void LogError(string stage, string toolName, string message, Exception ex, Dictionary<string, object> errorData, Dictionary<string, object> args, Dictionary<string, string> fileRefs, string root)
         {
             lock (Sync)
             {
@@ -379,6 +379,7 @@ namespace McpHost.Core
                     { "message", message ?? string.Empty },
                     { "error_data", errorData ?? new Dictionary<string, object>() },
                     { "arguments", args ?? new Dictionary<string, object>() },
+                    { "root", root ?? string.Empty },
                     { "files", fileRefs ?? new Dictionary<string, string>() }
                 };
 

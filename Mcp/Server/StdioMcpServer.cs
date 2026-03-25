@@ -9,11 +9,13 @@ namespace McpHost.Server
     class StdioMcpServer
     {
         readonly McpToolHandlers _handlers;
+        readonly string _root;
         readonly JavaScriptSerializer _json = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
 
-        public StdioMcpServer(McpToolHandlers handlers)
+        public StdioMcpServer(McpToolHandlers handlers, string root)
         {
             _handlers = handlers;
+            _root = root;
         }
 
         public void Run()
@@ -85,7 +87,7 @@ namespace McpHost.Server
             catch (Exception ex)
             {
                 Console.Error.WriteLine("MCP error processing message: " + ex.Message);
-                McpErrorLogger.LogError("process_message_exception", null, ex.Message, ex, null, null, null);
+                McpErrorLogger.LogError("process_message_exception", null, ex.Message, ex, null, null, null, _root);
                 return MakeError(null, -32700, "Parse error: " + ex.Message);
             }
         }
@@ -159,14 +161,15 @@ namespace McpHost.Server
                         null,
                         toolResult.ErrorData,
                         arguments,
-                        null);
+                        null,
+                        _root);
                 }
                 return MakeResult(id, result);
             }
             catch (Exception ex)
             {
                 Console.Error.WriteLine("[" + DateTime.Now.ToString("HH:mm:ss") + "] mcp error: " + toolName + " (" + sw.ElapsedMilliseconds + "ms): " + ex.Message);
-                McpErrorLogger.LogError("tool_exception", toolName, ex.Message, ex, null, arguments, null);
+                McpErrorLogger.LogError("tool_exception", toolName, ex.Message, ex, null, arguments, null, _root);
 
                 var content = new List<object>
                 {
@@ -227,7 +230,11 @@ namespace McpHost.Server
                 null,
                 message,
                 null,
-                new Dictionary<string, object> { { "jsonrpc_code", code } }, null, null);
+                new Dictionary<string, object> { { "jsonrpc_code", code } },
+                null,
+                null,
+                _root);
+                
             var resp = new Dictionary<string, object>
             {
                 { "jsonrpc", "2.0" },
@@ -239,6 +246,7 @@ namespace McpHost.Server
                     }
                 }
             };
+
             return _json.Serialize(resp);
         }
 

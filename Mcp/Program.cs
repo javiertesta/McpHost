@@ -259,9 +259,10 @@ namespace McpHost
                 }
             }
 
-            var policy = new RepoPolicy(ResolveServeRoot(root));
+            string resolvedRoot = ResolveServeRoot(root);
+            var policy = new RepoPolicy(resolvedRoot);
             var handlers = new McpToolHandlers(gateway, policy);
-            var server = new StdioMcpServer(handlers);
+            var server = new StdioMcpServer(handlers, resolvedRoot);
             server.Run();
             return 0;
         }
