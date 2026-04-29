@@ -14,8 +14,8 @@ namespace McpHost.Server
         // Additional directories denied for write operations
         static readonly string[] WriteDeniedDirs = { "bin", "obj" };
 
-        // Max file size for read (10 MB)
-        const long MaxFileSize = 10 * 1024 * 1024;
+        // Max file size for read (32 MB)
+        const long MaxFileSize = 32 * 1024 * 1024;
 
         public RepoPolicy(string root)
         {
