@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Security.Cryptography;
 using System.Text;
@@ -35,7 +36,8 @@ namespace McpHost.Core
             {
                 throw new InvalidOperationException(
                     "El texto contiene caracteres no representables en el encoding original del archivo ('" + snapshot.Encoding.WebName + "'). " +
-                    "Se aborta para evitar reemplazos silenciosos por '?'.",
+                    "Se aborta para evitar reemplazos silenciosos por '?'." +
+                    DescribeUnencodableChars(finalText, strictEncoding),
                     ex);
             }
 
@@ -70,6 +72,82 @@ namespace McpHost.Core
         }
 
         // ---------------- Helpers ----------------
+
+        // Detalla los caracteres que el encoding original no puede representar (codepoint, línea del
+        // archivo YA parchado y contexto). Sin esto el modelo tiene que adivinar cuál insertó de más.
+        // Solo corre en el camino de error, así que el costo del escaneo no importa.
+        static string DescribeUnencodableChars(string finalText, Encoding strictEncoding)
+        {
+            const int maxReported = 10;
+            if (String.IsNullOrEmpty(finalText) || strictEncoding == null) return String.Empty;
+
+            var cache = new Dictionary<string, bool>(StringComparer.Ordinal);
+            var detalles = new List<string>();
+            int total = 0;
+
+            string[] lines = NormalizeToLf(finalText).Split('\n');
+            for (int i = 0; i < lines.Length; i++)
+            {
+                string line = lines[i];
+                for (int j = 0; j < line.Length; j++)
+                {
+                    char c = line[j];
+                    if (c < 0x80) continue;   // ASCII: siempre representable
+
+                    bool esPar = Char.IsHighSurrogate(c) && j + 1 < line.Length && Char.IsLowSurrogate(line[j + 1]);
+                    string unit = esPar ? line.Substring(j, 2) : c.ToString();
+                    if (esPar) j++;
+
+                    bool ok;
+                    if (!cache.TryGetValue(unit, out ok))
+                    {
+                        ok = CanEncode(strictEncoding, unit);
+                        cache[unit] = ok;
+                    }
+                    if (ok) continue;
+
+                    total++;
+                    if (detalles.Count >= maxReported) continue;
+
+                    int cp = esPar ? Char.ConvertToUtf32(unit, 0) : (int)c;
+                    // Un surrogate suelto rompería el JSON de salida: no lo mostramos literal.
+                    string visible = (!esPar && Char.IsSurrogate(c)) ? "?" : unit;
+                    detalles.Add("- U+" + cp.ToString("X4") + " '" + visible + "' en línea " + (i + 1) + ": " + Snippet(line));
+                }
+            }
+
+            if (total == 0) return String.Empty;
+
+            var sb = new StringBuilder();
+            sb.Append("\n\nCaracteres no representables (").Append(total).Append("):\n");
+            sb.Append(String.Join("\n", detalles.ToArray()));
+            if (total > detalles.Count) sb.Append("\n- ... y ").Append(total - detalles.Count).Append(" más.");
+            sb.Append("\n\nCLAUDE: reemplazá esos caracteres por equivalentes ASCII y reintentá ");
+            sb.Append("(flechas -> \"->\" / \"<->\", comillas tipográficas -> \" o ', puntos suspensivos -> \"...\"). ");
+            sb.Append("Los números de línea son los del archivo YA parchado. ");
+            sb.Append("NO cambies el encoding del archivo: se preserva a propósito.");
+            return sb.ToString();
+        }
+
+        static string Snippet(string line)
+        {
+            if (line == null) return String.Empty;
+            string s = line.Trim();
+            return s.Length <= 120 ? s : s.Substring(0, 120) + "...";
+        }
+
+        static bool CanEncode(Encoding strictEncoding, string s)
+        {
+            try
+            {
+                strictEncoding.GetBytes(s);
+                return true;
+            }
+            catch (EncoderFallbackException)
+            {
+                return false;
+            }
+        }
 
         static string NormalizeToLf(string text)
         {

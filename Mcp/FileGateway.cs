@@ -117,10 +117,12 @@ namespace McpHost.Core
                     {
                         ExternalPatchEngine.Validate(canonicalDiffFallback, baseText);
                     }
-                    catch
+                    catch (Exception fallbackEx)
                     {
+                        // patch.exe también rechazó el diff. Su diagnóstico suele ser MÁS preciso que el
+                        // del validador semántico (p. ej. "ya aplicado"), así que no lo descartamos.
                         throw new PatchException(
-                            ex.Message,
+                            ComposeSemanticFailureMessage(ex.Message, fallbackEx),
                             errorCode: "patch_semantic_mismatch",
                             reason: ex.Message,
                             inner: ex);
@@ -167,6 +169,23 @@ namespace McpHost.Core
                     reason: ex.Message,
                     inner: ex);
             }
+        }
+
+        // Cuando el validador semántico Y patch.exe rechazan el mismo diff, el diagnóstico de patch.exe
+        // suele ser el útil (p. ej. "ya aplicado"). Antes se descartaba y el modelo reintentaba en loop.
+        static string ComposeSemanticFailureMessage(string semanticMessage, Exception fallbackEx)
+        {
+            string fallbackMessage = fallbackEx == null ? null : fallbackEx.Message;
+            if (string.IsNullOrWhiteSpace(fallbackMessage)) return semanticMessage;
+
+            fallbackMessage = fallbackMessage.Trim();
+
+            // Si patch.exe detectó que el patch ya está aplicado, ese diagnóstico manda: el mensaje del
+            // validador semántico ("regenerá el diff") llevaría a reintentar sin sentido.
+            if (fallbackMessage.IndexOf(ExternalPatchEngine.PatchAlreadyAppliedMarker, StringComparison.Ordinal) >= 0)
+                return fallbackMessage + "\n\n=== Detalle del validador interno ===\n" + semanticMessage;
+
+            return semanticMessage + "\n\n=== Diagnóstico de patch.exe (fallback) ===\n" + fallbackMessage;
         }
 
         static string AugmentPatchError(string message)

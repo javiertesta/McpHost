@@ -121,16 +121,30 @@ namespace McpHost.Core
         static string QuoteArg(string path)
             => "\"" + path.Replace("\"", "\\\"") + "\"";
 
+        // Marcador que FileGateway usa para reconocer un diagnóstico decisivo de patch.exe.
+        internal const string PatchAlreadyAppliedMarker = "el patch YA ESTÁ APLICADO";
+
         static string BuildHunkFailuresSummary(string patchOutput)
         {
             if (string.IsNullOrWhiteSpace(patchOutput)) return null;
+
+            // patch.exe reconoció el diff pero el archivo ya tiene los cambios aplicados (o el diff
+            // está invertido). Regenerar el mismo diff no sirve: hay que releer el archivo.
+            if (patchOutput.IndexOf("Reversed (or previously applied)", StringComparison.OrdinalIgnoreCase) >= 0)
+                return
+                    "Diagnóstico automático:\n" +
+                    "- patch.exe detectó que " + PatchAlreadyAppliedMarker + " en el archivo, o que el diff\n" +
+                    "  está invertido ('+' y '-' al revés).\n" +
+                    "- NO regeneres el mismo diff: re-leé el archivo (file_read_range) y fijate si el cambio ya está.\n" +
+                    "- Si ya está aplicado no hay nada que hacer; si querés revertirlo, generá el diff en el sentido inverso.";
+
+            // Los @@ deben ir por número de línea ascendente y sin solaparse.
+            bool misordered = patchOutput.IndexOf("misordered hunks", StringComparison.OrdinalIgnoreCase) >= 0;
 
             var matches = Regex.Matches(
                 patchOutput,
                 @"Hunk\s+#(?<h>\d+)\s+FAILED\s+at\s+(?<l>\d+)\.",
                 RegexOptions.IgnoreCase);
-
-            if (matches == null || matches.Count == 0) return null;
 
             var parts = new List<string>();
             foreach (Match m in matches)
@@ -141,13 +155,17 @@ namespace McpHost.Core
                     parts.Add("hunk " + h + " (línea aprox. " + l + ")");
             }
 
-            if (parts.Count == 0) return null;
+            if (parts.Count == 0 && !misordered) return null;
 
-            return
-                "Diagnóstico automático:\n" +
-                "- patch.exe detectó fallos en " + parts.Count + " hunk(s): " + string.Join(", ", parts) + ".\n" +
-                "- Esto suele indicar que el contexto del diff no coincide exactamente con el archivo (no solo desplazamiento de línea).\n" +
-                "- Recomendación: re-leer rangos exactos y regenerar el diff en hunks más pequeños, o validar primero con parse_only=true.";
+            var sb = new StringBuilder("Diagnóstico automático:\n");
+            if (misordered)
+                sb.Append("- patch.exe rechazó el diff por HUNKS FUERA DE ORDEN ('misordered hunks'): los @@ deben ir por número de línea ASCENDENTE y sin solaparse.\n");
+            if (parts.Count > 0)
+                sb.Append("- patch.exe detectó fallos en " + parts.Count + " hunk(s): " + string.Join(", ", parts) + ".\n");
+            if (!misordered)
+                sb.Append("- Esto suele indicar que el contexto del diff no coincide exactamente con el archivo (no solo desplazamiento de línea).\n");
+            sb.Append("- Recomendación: re-leer rangos exactos y regenerar el diff en hunks más pequeños, o validar primero con parse_only=true.");
+            return sb.ToString();
         }
 
         static void TryDelete(string path)

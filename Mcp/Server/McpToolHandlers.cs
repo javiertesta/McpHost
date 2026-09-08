@@ -129,6 +129,12 @@ namespace McpHost.Server
                                         { "description", "Set to true to allow patches touching more than 200 lines (up to 1000). Default: false." }
                                     }
                                 },
+                                { "allow_extralarge", new Dictionary<string, object>
+                                    {
+                                        { "type", "boolean" },
+                                        { "description", "Set to true to allow patches touching up to 5000 lines. Implies allow_large. Writes a timestamped backup of the file before patching. Does NOT bypass the proportion guard ('Patch demasiado invasivo'): a patch touching more than 30% of a file of 150+ lines is rejected regardless of this flag. Default: false." }
+                                    }
+                                },
                                 { "parse_only", new Dictionary<string, object>
                                     {
                                         { "type", "boolean" },
