@@ -208,6 +208,11 @@ namespace McpHost.Core
         // patch.exe y la aplicación en memoria tienen que dar exactamente lo mismo; si no, no se escribe nada.
         static string ApplyWithBothEngines(PatchPlan plan)
         {
+            // Sin hunks no hay nada que aplicar (pasa si el único cambio era borrar la línea vacía final, que se
+            // ignora con un AVISO), y patch.exe rechaza un diff vacío.
+            if (plan.Hunks.Count == 0)
+                return UnifiedDiffNormalizer.ComposeText(plan, plan.RealLines);
+
             string patchExeDiff = UnifiedDiffNormalizer.BuildPatchExeDiff(plan);
             string patchExeInput = UnifiedDiffNormalizer.BuildPatchExeInput(plan);
 

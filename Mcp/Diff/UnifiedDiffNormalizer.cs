@@ -27,6 +27,9 @@ namespace McpHost.Diff
         public List<string> RealLines { get; set; }
         public bool HasFinalNewline { get; set; }
         public bool WasEmpty { get; set; }
+        // Si el resultado termina en salto de línea: lo del archivo (uno vacío pasa a tenerlo), salvo que un
+        // marcador "\ No newline at end of file" de un solo lado pida otra cosa.
+        public bool FinalNewline { get; set; }
         public List<PlannedHunk> Hunks { get; } = new List<PlannedHunk>();
         public List<string> Warnings { get; } = new List<string>();
     }
@@ -50,6 +53,7 @@ namespace McpHost.Diff
                 WasEmpty = lfText.Length == 0,
                 HasFinalNewline = lfText.EndsWith("\n", StringComparison.Ordinal)
             };
+            plan.FinalNewline = plan.WasEmpty || plan.HasFinalNewline;
             int realCount = plan.WasEmpty ? 0 : (plan.HasFinalNewline ? fileLines.Length - 1 : fileLines.Length);
             plan.RealLines = new List<string>(fileLines.Take(realCount));
 
@@ -127,6 +131,29 @@ namespace McpHost.Diff
 
                     planned.Lines.Add(prefix + plan.RealLines[idx]);
                     idx++;
+                }
+
+                // Marcador "\ No newline at end of file" (el parser garantiza que sólo viene en el último hunk). Con
+                // un solo lado marcado, el diff pide agregar o sacar el salto de línea final y se respeta. Sin
+                // marcador, o con los dos lados marcados (no cambia), se conserva el del archivo.
+                if (hunk.OldNoNewlineAtEnd || hunk.NewNoNewlineAtEnd)
+                {
+                    if (idx < realCount)
+                        throw new PatchException(
+                            "Hunk " + number + ": trae el marcador '\\ No newline at end of file', pero no llega al final del archivo (termina en la línea " + idx + " de " + realCount + ").",
+                            errorCode: "eof_marker_not_at_end",
+                            hunkIndex: number,
+                            expectedFormat: "El marcador sólo va en un hunk que termina en la última línea del archivo. Si no querés cambiar el salto de línea final, sacalo.");
+
+                    if (hunk.OldNoNewlineAtEnd != hunk.NewNoNewlineAtEnd)
+                    {
+                        bool pedido = hunk.OldNoNewlineAtEnd;   // sólo el viejo no tenía salto final: el nuevo sí
+                        if (pedido != plan.FinalNewline)
+                            plan.Warnings.Add(pedido
+                                ? "el archivo queda terminado en salto de línea, como pide el marcador '\\ No newline at end of file' del diff."
+                                : "el archivo queda sin salto de línea al final, como pide el marcador '\\ No newline at end of file' del diff.");
+                        plan.FinalNewline = pedido;
+                    }
                 }
 
                 // Si sólo "borraba" la línea vacía final, no queda nada por hacer.
@@ -214,13 +241,12 @@ namespace McpHost.Diff
             return new List<string>(body.Split('\n'));
         }
 
-        // Texto final (LF). Se respeta si el archivo terminaba o no en salto de línea; uno vacío pasa a tenerlo,
-        // como cualquier archivo nuevo.
+        // Texto final (LF). Termina o no en salto de línea según plan.FinalNewline: lo del archivo, salvo que un
+        // marcador "\ No newline at end of file" pida otra cosa.
         public static string ComposeText(PatchPlan plan, List<string> lines)
         {
             if (lines.Count == 0) return string.Empty;
-            bool finalNewline = plan.WasEmpty || plan.HasFinalNewline;
-            return string.Join("\n", lines) + (finalNewline ? "\n" : string.Empty);
+            return string.Join("\n", lines) + (plan.FinalNewline ? "\n" : string.Empty);
         }
 
         static int LeadingContext(List<string> lines)

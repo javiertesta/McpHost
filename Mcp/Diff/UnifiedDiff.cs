@@ -27,5 +27,10 @@ namespace McpHost.Diff
         // Líneas de contexto que el validador tuvo que ignorar (fuzz) para ubicar el hunk.
         public int IgnoredLeadingContext { get; set; }
         public int IgnoredTrailingContext { get; set; }
+
+        // Marcador "\ No newline at end of file": la última línea vieja (o nueva) del hunk es la última del
+        // archivo y no termina en salto de línea.
+        public bool OldNoNewlineAtEnd { get; set; }
+        public bool NewNoNewlineAtEnd { get; set; }
     }
 }

@@ -39,6 +39,9 @@ namespace McpHost.Diff
                 }
                 else if (raw.StartsWith("@@"))
                 {
+                    if (current != null && (current.OldNoNewlineAtEnd || current.NewNoNewlineAtEnd))
+                        throw InvalidEofMarker("el hunk de la línea " + lineIndex + " viene después del marcador, que sólo puede ir en el último hunk.", diff.Hunks.Count, lineIndex, raw);
+
                     int startOriginal, lengthOriginal, startNew, lengthNew;
                     bool normalizedLegacyHeader;
                     bool headerOk = TryParseHunkHeader(raw, out startOriginal, out lengthOriginal, out startNew, out lengthNew, out normalizedLegacyHeader);
@@ -87,7 +90,13 @@ namespace McpHost.Diff
                     }
                     else if (raw.StartsWith("\\ No newline at end of file", StringComparison.Ordinal))
                     {
-                        // Marcador estándar de unified diff. No representa una línea del hunk.
+                        // Marcador estándar de unified diff. No es una línea del hunk: dice que la línea anterior es la
+                        // última del archivo y no termina en salto de línea. Si la anterior es ' ', vale para los dos lados.
+                        if (current.Lines.Count == 0)
+                            throw InvalidEofMarker("en la línea " + lineIndex + " no hay ninguna línea del hunk antes del marcador.", diff.Hunks.Count, lineIndex, raw);
+                        char anterior = current.Lines[current.Lines.Count - 1][0];
+                        if (anterior != '+') current.OldNoNewlineAtEnd = true;
+                        if (anterior != '-') current.NewNoNewlineAtEnd = true;
                     }
                     else
                     {
@@ -119,6 +128,10 @@ namespace McpHost.Diff
                                     : "Cada línea del hunk debe iniciar con ' ', '+' o '-'.",
                                 problematicLine: Truncate(raw, 240));
                         }
+
+                        // Después del marcador, ese lado del archivo ya terminó: no puede seguir ninguna línea suya.
+                        if ((current.OldNoNewlineAtEnd && p != '+') || (current.NewNoNewlineAtEnd && p != '-'))
+                            throw InvalidEofMarker("la línea " + lineIndex + " sigue del mismo lado del archivo después del marcador.", diff.Hunks.Count, lineIndex, raw);
 
                         current.Lines.Add(raw);
                     }
@@ -338,6 +351,18 @@ namespace McpHost.Diff
                     reason: "Se detectó BOM al inicio del contenido del diff.",
                     expectedFormat: "UTF-8 sin BOM.");
             }
+        }
+
+        static PatchException InvalidEofMarker(string detail, int hunkIndex, int lineIndex, string raw)
+        {
+            return new PatchException(
+                "Diff inválido: marcador '\\ No newline at end of file' mal ubicado: " + detail,
+                errorCode: "invalid_eof_marker",
+                hunkIndex: hunkIndex,
+                diffLineNumber: lineIndex,
+                reason: "El marcador dice que la línea anterior es la última del archivo y no termina en salto de línea.",
+                expectedFormat: "Va justo después de la última línea del archivo (la vieja con ' ' o '-', la nueva con ' ' o '+') y sólo en el último hunk. Si no querés cambiar el salto de línea final, sacalo.",
+                problematicLine: Truncate(raw, 240));
         }
 
         static string Truncate(string value, int max)
