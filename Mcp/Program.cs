@@ -166,9 +166,15 @@ namespace McpHost
                 throw new ArgumentException("No existe el directorio de diffFile: " + diffPath);
             }
             var snap = gateway.Read(path);
-            gateway.ApplyPatchOnly(snap, diffText, hash, allowLarge, allowExtraLarge);
+            PatchResult result = gateway.ApplyPatchOnly(snap, diffText, hash, allowLarge, allowExtraLarge);
 
             Console.WriteLine("OK");
+            foreach (string warning in result.Warnings)
+                Console.WriteLine("AVISO: " + warning);
+            Console.WriteLine("-----HASH-----");
+            Console.WriteLine(result.HashNormalized);
+            Console.WriteLine("-----HASH-STRICT-----");
+            Console.WriteLine(result.HashStrict);
             return 0;
         }
 

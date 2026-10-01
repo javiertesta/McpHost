@@ -9,10 +9,11 @@ namespace McpHost.Core
     static class FileSnapshotWriter
     {
         /// <summary>
-        /// Escribe el texto final preservando Encoding/BOM/NewLine del snapshot.
-        /// Requiere que patchedText venga SIN BOM (texto "lógico") y preferentemente normalizado a LF.
+        /// Convierte el texto final a bytes preservando Encoding/BOM/NewLine del snapshot, sin escribir nada.
+        /// Falla si hay caracteres no representables en el encoding original: así parse_only lo detecta igual
+        /// que la escritura real. Requiere que patchedText venga SIN BOM (texto "lógico") y normalizado a LF.
         /// </summary>
-        public static string WritePatched(FileSnapshot snapshot, string patchedText)
+        public static byte[] PrepareBytes(FileSnapshot snapshot, string patchedText)
         {
             if (snapshot == null) throw new ArgumentNullException("snapshot");
             if (patchedText == null) throw new ArgumentNullException("patchedText");
@@ -53,10 +54,18 @@ namespace McpHost.Core
                     "Roundtrip falló: el texto no puede ser re-codificado sin pérdida con el encoding original."
                 );
 
-            // 6) Escritura "lo más atómica posible"
-            WriteAllBytesAtomic(snapshot.Path, finalBytes);
+            return finalBytes;
+        }
 
-            // 7) Hash del resultado (sobre bytes finales)
+        /// <summary>
+        /// Escribe los bytes que armó PrepareBytes de la forma "lo más atómica posible" y devuelve su SHA-256.
+        /// </summary>
+        public static string WriteBytes(FileSnapshot snapshot, byte[] finalBytes)
+        {
+            if (snapshot == null) throw new ArgumentNullException("snapshot");
+            if (finalBytes == null) throw new ArgumentNullException("finalBytes");
+
+            WriteAllBytesAtomic(snapshot.Path, finalBytes);
             return ComputeSha256(finalBytes);
         }
 

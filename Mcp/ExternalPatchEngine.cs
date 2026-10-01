@@ -9,15 +9,10 @@ namespace McpHost.Core
 {
     static class ExternalPatchEngine
     {
-        // Valida el diff contra el contenido sin escribir (dry-run). Lanza PatchException si falla.
-        public static void Validate(string diffText, string normalizedLfContent)
-            => RunCore(diffText, normalizedLfContent, dryRun: true);
-
-        // Aplica el diff. Retorna el contenido parchado (LF, UTF-8). Lanza PatchException si falla.
+        // Aplica el diff sobre una copia temporal (nunca sobre el archivo real) y devuelve el resultado (LF, UTF-8).
+        // Corre con --fuzz=0: el MCP ya ubicó cada hunk de forma exacta y normalizó el contexto, así que patch.exe
+        // no tiene nada que adivinar. Si igual falla, el problema es del MCP, no del diff recibido.
         public static string Apply(string diffText, string normalizedLfContent)
-            => RunCore(diffText, normalizedLfContent, dryRun: false);
-
-        static string RunCore(string diffText, string normalizedLfContent, bool dryRun)
         {
             string patchExe = McpConfig.Instance.PatchExePath;
             string tempDir = Path.GetTempPath();
@@ -40,9 +35,8 @@ namespace McpHost.Core
                 // Armar argumentos
                 var argsList = new List<string>
                 {
-                    "--forward", "--batch", "--no-backup-if-mismatch"
+                    "--forward", "--batch", "--no-backup-if-mismatch", "--fuzz=0"
                 };
-                if (dryRun) argsList.Add("--dry-run");
                 argsList.Add("-i");
                 argsList.Add(QuoteArg(diffTmp));
                 argsList.Add(QuoteArg(fileTmp));
@@ -76,9 +70,11 @@ namespace McpHost.Core
                     string output = (stdout + "\n" + stderr).Trim();
                     string hunkSummary = BuildHunkFailuresSummary(output);
                     string incidentDir = McpErrorLogger.CreateIncidentDirectory("patch_engine");
-                    McpErrorLogger.SaveBytesFile(incidentDir, "archivo_original.tmp", File.ReadAllBytes(fileTmp));
-                    McpErrorLogger.SaveTextFile(incidentDir, "archivo_temp_enviado_a_patch.tmp", File.ReadAllText(fileTmp, utf8NoBom));
-                    McpErrorLogger.SaveTextFile(incidentDir, "diff_enviado_a_patch.diff", File.ReadAllText(diffTmp, utf8NoBom));
+                    // La evidencia sale de lo que se le PASÓ a patch.exe: si aplicó algunos hunks antes de fallar,
+                    // el temporal ya no es el original (antes se guardaba ese temporal como "original").
+                    McpErrorLogger.SaveTextFile(incidentDir, "archivo_original.tmp", normalizedLfContent);
+                    McpErrorLogger.SaveTextFile(incidentDir, "diff_enviado_a_patch.diff", normalizedDiff);
+                    TrySaveFile(incidentDir, "archivo_temp_despues_de_patch.tmp", fileTmp);
                     McpErrorLogger.SaveTextFile(
                         incidentDir,
                         "patch_stdout_stderr.txt",
@@ -91,8 +87,7 @@ namespace McpHost.Core
                     if (!string.IsNullOrWhiteSpace(hunkSummary))
                         McpErrorLogger.SaveTextFile(incidentDir, "diagnostico_hunks.txt", hunkSummary);
 
-                    if (File.Exists(fileTmp + ".rej"))
-                        McpErrorLogger.SaveTextFile(incidentDir, "archivo_temp.rej", File.ReadAllText(fileTmp + ".rej", utf8NoBom));
+                    TrySaveFile(incidentDir, "archivo_temp.rej", fileTmp + ".rej");
 
                     string outputConDiagnostico = output + (string.IsNullOrWhiteSpace(hunkSummary) ? string.Empty : ("\n\n" + hunkSummary));
 
@@ -102,8 +97,6 @@ namespace McpHost.Core
                         reason: outputConDiagnostico,
                         evidenceDirectory: incidentDir);
                 }
-
-                if (dryRun) return null;
 
                 return File.ReadAllText(fileTmp, utf8NoBom);
             }
@@ -121,7 +114,17 @@ namespace McpHost.Core
         static string QuoteArg(string path)
             => "\"" + path.Replace("\"", "\\\"") + "\"";
 
-        // Marcador que FileGateway usa para reconocer un diagnóstico decisivo de patch.exe.
+        static void TrySaveFile(string incidentDir, string fileName, string sourcePath)
+        {
+            try
+            {
+                if (incidentDir != null && File.Exists(sourcePath))
+                    McpErrorLogger.SaveBytesFile(incidentDir, fileName, File.ReadAllBytes(sourcePath));
+            }
+            catch { }
+        }
+
+        // Frase del diagnóstico cuando patch.exe detecta un patch ya aplicado (o invertido).
         internal const string PatchAlreadyAppliedMarker = "el patch YA ESTÁ APLICADO";
 
         static string BuildHunkFailuresSummary(string patchOutput)

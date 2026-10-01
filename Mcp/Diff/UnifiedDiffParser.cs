@@ -17,17 +17,26 @@ namespace McpHost.Diff
 
             var lines = diffText.Replace("\r\n", "\n").Replace("\r", "\n").Split('\n');
             int last = lines.Length - 1;
-            int lineIndex = 0;
+            int repeatedHeaders = 0;
 
-            foreach (var raw in lines)
+            for (int i = 0; i < lines.Length; i++)
             {
-                lineIndex++;
+                string raw = lines[i];
+                int lineIndex = i + 1;
 
                 // Ignorar la línea vacía final (artefacto del Split)
-                if (raw.Length == 0 && last >= 0 && (lineIndex - 1) == last) break;
+                if (raw.Length == 0 && i == last) break;
 
-                if (raw.StartsWith("---")) diff.OriginalFile = raw;
-                else if (raw.StartsWith("+++")) diff.NewFile = raw;
+                // Los encabezados de archivo sólo cuentan antes del primer hunk. Dentro de un hunk, "---"/"+++"
+                // son el borrado/alta de líneas que empiezan con "--"/"++" (antes se descartaban y el patch
+                // perdía esas líneas en silencio), salvo un encabezado repetido que se reconoce sin ambigüedad.
+                if (current == null && raw.StartsWith("---")) diff.OriginalFile = raw;
+                else if (current == null && raw.StartsWith("+++")) diff.NewFile = raw;
+                else if (current != null && IsRepeatedFileHeader(diff, current, lines, i))
+                {
+                    repeatedHeaders++;
+                    i++; // la línea "+++" del mismo encabezado
+                }
                 else if (raw.StartsWith("@@"))
                 {
                     int startOriginal, lengthOriginal, startNew, lengthNew;
@@ -51,7 +60,11 @@ namespace McpHost.Diff
                         StartOriginal = startOriginal,
                         LengthOriginal = lengthOriginal,
                         StartNew = startNew,
-                        LengthNew = lengthNew
+                        LengthNew = lengthNew,
+                        DeclaredStartOriginal = startOriginal,
+                        DeclaredLengthOriginal = lengthOriginal,
+                        DeclaredLengthNew = lengthNew,
+                        HasNumericHeader = !normalizedLegacyHeader
                     };
 
                     if (normalizedLegacyHeader)
@@ -81,6 +94,17 @@ namespace McpHost.Diff
                         char p = raw[0];
                         if (p != ' ' && p != '+' && p != '-')
                         {
+                            // "Index: x" (svn diff) o "diff --git a/x b/x" (git) después de un hunk: empieza el diff de otro archivo.
+                            if (raw.StartsWith("Index: ", StringComparison.Ordinal) || raw.StartsWith("diff --git ", StringComparison.Ordinal))
+                                throw new PatchException(
+                                    "Diff inválido: contiene más de un archivo.",
+                                    errorCode: "multi_file_diff",
+                                    hunkIndex: diff.Hunks.Count,
+                                    diffLineNumber: lineIndex,
+                                    reason: "La línea " + lineIndex + " ('" + Truncate(raw, 120) + "') empieza el diff de otro archivo.",
+                                    expectedFormat: "file.apply_patch_only modifica un solo archivo por llamada: mandá un diff por archivo (con svn diff, el bloque que empieza en su 'Index:').",
+                                    problematicLine: Truncate(raw, 240));
+
                             bool pareceApplyPatch = raw.StartsWith("*** ", StringComparison.Ordinal);
                             throw new PatchException(
                                 "Diff inválido: prefijo desconocido '" + p + "'.",
@@ -145,7 +169,119 @@ namespace McpHost.Diff
                 }
             }
 
+            EnsureNoChangeLineWasLost(lines, diff, repeatedHeaders);
+
             return diff;
+        }
+
+        // Dentro de un hunk, "--- x" + "+++ y" + "@@" puede ser un encabezado repetido (o de otro archivo) o el
+        // borrado/alta de líneas que empiezan con "--"/"++". Deciden la forma de las líneas y los contadores del
+        // @@; si sigue siendo ambiguo se rechaza, porque adivinar mal pierde líneas del patch sin avisar.
+        static bool IsRepeatedFileHeader(UnifiedDiff diff, DiffHunk current, string[] lines, int i)
+        {
+            if (i + 2 >= lines.Length) return false;
+            string minus = lines[i];
+            string plus = lines[i + 1];
+            if (!minus.StartsWith("---") || !plus.StartsWith("+++") || !lines[i + 2].StartsWith("@@")) return false;
+            if (!LooksLikeFileHeader(minus) || !LooksLikeFileHeader(plus)) return false;
+
+            bool exactRepeat =
+                diff.OriginalFile != null && diff.NewFile != null &&
+                minus.TrimEnd() == diff.OriginalFile.TrimEnd() &&
+                plus.TrimEnd() == diff.NewFile.TrimEnd();
+
+            int consumedOld = 0;
+            int producedNew = 0;
+            foreach (var l in current.Lines)
+            {
+                if (l[0] == ' ' || l[0] == '-') consumedOld++;
+                if (l[0] == ' ' || l[0] == '+') producedNew++;
+            }
+            bool completeBefore = current.HasNumericHeader &&
+                consumedOld == current.DeclaredLengthOriginal && producedNew == current.DeclaredLengthNew;
+            bool completeWithPair = current.HasNumericHeader &&
+                consumedOld + 1 == current.DeclaredLengthOriginal && producedNew + 1 == current.DeclaredLengthNew;
+
+            if (!exactRepeat && !completeBefore)
+            {
+                if (completeWithPair) return false;
+
+                throw new PatchException(
+                    "Diff inválido: encabezado ambiguo en la línea " + (i + 1) + ".",
+                    errorCode: "ambiguous_file_header",
+                    hunkIndex: diff.Hunks.Count,
+                    diffLineNumber: i + 1,
+                    reason: "Las líneas '---'/'+++' seguidas de '@@' pueden ser un encabezado repetido o el borrado/alta de líneas que empiezan con '--'/'++', y los contadores del @@ no alcanzan para decidir.",
+                    expectedFormat: "Si es un encabezado repetido, quitalo (un solo '---'/'+++' al principio). Si es contenido, corregí los contadores del @@ o agregá una línea de contexto después.",
+                    problematicLine: Truncate(minus, 240));
+            }
+
+            if (diff.OriginalFile != null &&
+                !string.Equals(HeaderFileName(minus), HeaderFileName(diff.OriginalFile), StringComparison.OrdinalIgnoreCase))
+            {
+                throw new PatchException(
+                    "Diff inválido: contiene más de un archivo.",
+                    errorCode: "multi_file_diff",
+                    hunkIndex: diff.Hunks.Count,
+                    diffLineNumber: i + 1,
+                    reason: "El encabezado de la línea " + (i + 1) + " nombra un archivo distinto del primero ('" + Truncate(diff.OriginalFile, 120) + "').",
+                    expectedFormat: "file.apply_patch_only modifica un solo archivo por llamada: mandá un diff por archivo.",
+                    problematicLine: Truncate(minus, 240));
+            }
+
+            return true;
+        }
+
+        // "--- a/x.vb", "+++ b/x.vb", "--- /dev/null", "--- D:\Repo\x.vb", "--- x.vb<TAB>fecha": sí.
+        // "--- comentario viejo" (el borrado de "-- comentario viejo"): no, tiene espacios.
+        static bool LooksLikeFileHeader(string line)
+        {
+            if (line.Length < 5 || (line[3] != ' ' && line[3] != '\t')) return false;
+
+            string name = line.Substring(4);
+            int tab = name.IndexOf('\t');
+            if (tab >= 0) name = name.Substring(0, tab);
+            name = name.Trim();
+
+            if (name.Length == 0) return false;
+            if (name == "/dev/null" || name.StartsWith("a/") || name.StartsWith("b/")) return true;
+            if (Regex.IsMatch(name, @"^[A-Za-z]:[\\/]")) return true;
+            return name.IndexOf(' ') < 0;
+        }
+
+        static string HeaderFileName(string headerLine)
+        {
+            string name = headerLine.Length > 4 ? headerLine.Substring(4) : string.Empty;
+            int tab = name.IndexOf('\t');
+            if (tab >= 0) name = name.Substring(0, tab);
+            name = name.Trim().Replace('\\', '/');
+            int slash = name.LastIndexOf('/');
+            return slash >= 0 ? name.Substring(slash + 1) : name;
+        }
+
+        // Toda línea '+'/'-' posterior al primer @@ tiene que terminar en algún hunk (salvo las de encabezados
+        // repetidos). Si no, el parser perdió líneas: mejor rechazar el diff que aplicarlo a medias.
+        static void EnsureNoChangeLineWasLost(string[] lines, UnifiedDiff diff, int repeatedHeaders)
+        {
+            int expected = 0;
+            bool insideHunks = false;
+            foreach (var raw in lines)
+            {
+                if (raw.StartsWith("@@")) insideHunks = true;
+                else if (insideHunks && raw.Length > 0 && (raw[0] == '+' || raw[0] == '-')) expected++;
+            }
+            expected -= 2 * repeatedHeaders;
+
+            int parsed = 0;
+            foreach (var hunk in diff.Hunks)
+                foreach (var line in hunk.Lines)
+                    if (line[0] == '+' || line[0] == '-') parsed++;
+
+            if (parsed != expected)
+                throw new PatchException(
+                    "Error interno del parser: el diff trae " + expected + " líneas '+'/'-' y se leyeron " + parsed + ".",
+                    errorCode: "parser_lost_lines",
+                    reason: "Se rechaza el diff para no aplicar el patch a medias.");
         }
 
         static bool TryParseHunkHeader(

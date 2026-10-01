@@ -3,6 +3,8 @@ using McpHost.Utils;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
+using System.Runtime.ExceptionServices;
 using System.Threading.Tasks;
 using System.Text;
 using System.Web.Script.Serialization;
@@ -14,8 +16,18 @@ namespace McpHost.Core
         public FileSnapshot Read(string path)
         {
             var readTask = Task.Run(() => File.ReadAllBytes(path));
-            if (!readTask.Wait(10000))
-                throw new InvalidOperationException("File read timed out after 10s: " + path);
+            try
+            {
+                if (!readTask.Wait(10000))
+                    throw new InvalidOperationException("File read timed out after 10s: " + path);
+            }
+            catch (AggregateException ex)
+            {
+                // Task.Wait envuelve la excepción real (archivo inexistente, acceso denegado...) en una
+                // AggregateException cuyo mensaje ("Se han producido uno o varios errores.") no dice nada.
+                ExceptionDispatchInfo.Capture(ex.GetBaseException()).Throw();
+                throw;
+            }
             byte[] bytes = readTask.Result;
 
             bool hasBom;
@@ -50,17 +62,17 @@ namespace McpHost.Core
             };
         }
 
-        public void ApplyPatchOnly(FileSnapshot snap, string diffText, string expectedHash, bool allowLarge, bool allowExtraLarge)
+        public PatchResult ApplyPatchOnly(FileSnapshot snap, string diffText, string expectedHash, bool allowLarge, bool allowExtraLarge)
         {
-            ApplyPatchCore(snap, diffText, expectedHash, allowLarge, allowExtraLarge, parseOnly: false);
+            return ApplyPatchCore(snap, diffText, expectedHash, allowLarge, allowExtraLarge, parseOnly: false);
         }
 
-        public void ValidatePatchOnly(FileSnapshot snap, string diffText, string expectedHash, bool allowLarge, bool allowExtraLarge)
+        public PatchResult ValidatePatchOnly(FileSnapshot snap, string diffText, string expectedHash, bool allowLarge, bool allowExtraLarge)
         {
-            ApplyPatchCore(snap, diffText, expectedHash, allowLarge, allowExtraLarge, parseOnly: true);
+            return ApplyPatchCore(snap, diffText, expectedHash, allowLarge, allowExtraLarge, parseOnly: true);
         }
 
-        void ApplyPatchCore(FileSnapshot snap, string diffText, string expectedHash, bool allowLarge, bool allowExtraLarge, bool parseOnly)
+        PatchResult ApplyPatchCore(FileSnapshot snap, string diffText, string expectedHash, bool allowLarge, bool allowExtraLarge, bool parseOnly)
         {
             int maxTouchedLines = allowExtraLarge ? 5000 : (allowLarge ? 1000 : 200);
 
@@ -98,55 +110,66 @@ namespace McpHost.Core
 
                 UnifiedDiffValidator.Validate(diff, baseText.Split('\n').Length, maxTouchedLines);
 
-                // Diff canónico con las posiciones originales del cliente. Se usa en el fallback
-                // con patch.exe en caso de que el validador semántico lance, dado que el objeto
-                // diff puede quedar en estado inconsistente si el validador falló a mitad.
-                string canonicalDiffFallback = BuildCanonicalUnifiedDiff(diff);
-                bool semanticValidationPassed = false;
-
                 try
                 {
                     UnifiedDiffSemanticValidator.ValidateAgainstText(diff, baseText);
-                    semanticValidationPassed = true;
                 }
-                catch (InvalidOperationException ex)
+                catch (InvalidOperationException ex) when (!(ex is PatchException))
                 {
-                    // Fallback: si patch.exe valida el diff completo, no bloquear por falso negativo
-                    // del validador semántico interno.
-                    try
-                    {
-                        ExternalPatchEngine.Validate(canonicalDiffFallback, baseText);
-                    }
-                    catch (Exception fallbackEx)
-                    {
-                        // patch.exe también rechazó el diff. Su diagnóstico suele ser MÁS preciso que el
-                        // del validador semántico (p. ej. "ya aplicado"), así que no lo descartamos.
-                        throw new PatchException(
-                            ComposeSemanticFailureMessage(ex.Message, fallbackEx),
-                            errorCode: "patch_semantic_mismatch",
-                            reason: ex.Message,
-                            inner: ex);
-                    }
+                    // Sin fallback a patch.exe: si el validador no ubica un hunk de forma exacta y única, patch.exe
+                    // tampoco tiene que aplicarlo "donde le parezca" (con fuzz elegía el match más cercano aunque
+                    // hubiera varios). Lo que sí se diagnostica es si el cambio ya estaba aplicado.
+                    if (UnifiedDiffSemanticValidator.LooksAlreadyApplied(diffText, baseText))
+                        throw AlreadyApplied(ex.Message, ex);
+
+                    throw new PatchException(ex.Message, errorCode: "patch_semantic_mismatch", reason: ex.Message, inner: ex);
                 }
 
-                // Si el validador semántico reubicó hunks, reconstruir con posiciones corregidas.
-                // Si falló pero patch.exe aceptó el diff, usar posiciones originales.
-                string canonicalDiff = semanticValidationPassed
-                    ? BuildCanonicalUnifiedDiff(diff)
-                    : canonicalDiffFallback;
+                // Si para ubicar algún hunk hubo que ignorar contexto, antes de aplicar se descarta que el patch ya
+                // estuviera aplicado: con contexto ignorado, un diff reenviado puede volver a "entrar" y duplicar líneas.
+                if (diff.Hunks.Any(h => h.IgnoredLeadingContext > 0 || h.IgnoredTrailingContext > 0) &&
+                    UnifiedDiffSemanticValidator.LooksAlreadyApplied(diffText, baseText))
+                    throw AlreadyApplied("Para ubicar el diff hubo que ignorar contexto, y el contenido nuevo ya está en el archivo tal cual.", null);
 
+                PatchPlan plan = UnifiedDiffNormalizer.BuildPlan(diff, baseText);
+                string finalText = ApplyWithBothEngines(plan);
+
+                // También con parse_only: así detecta caracteres no representables en el encoding original.
+                byte[] finalBytes = FileSnapshotWriter.PrepareBytes(snap, finalText);
+
+                PatchResult result = PatchResult.FromPlan(plan);
                 if (parseOnly)
                 {
-                    ExternalPatchEngine.Validate(canonicalDiff, baseText);
-                    return;
+                    // Nada cambió: los hashes son los del archivo actual, los que sirven para aplicar.
+                    result.HashStrict = snap.Sha256;
+                    result.HashNormalized = snap.Sha256NormalizedWhitespace;
+                    result.TotalLines = baseText.Split('\n').Length;
+                    return result;
                 }
 
-                string patched = ExternalPatchEngine.Apply(canonicalDiff, baseText);
-
                 if (allowExtraLarge)
-                    WriteTimestampedBackup(snap);
+                    result.BackupPath = WriteTimestampedBackup(snap);
 
-                FileSnapshotWriter.WritePatched(snap, patched);
+                string writtenHash = FileSnapshotWriter.WriteBytes(snap, finalBytes);
+                result.HashStrict = writtenHash;
+                result.HashNormalized = HashUtil.Sha256(new UTF8Encoding(false).GetBytes(WhitespaceNormalizeUtil.NormalizeForLooseHash(finalText)));
+                result.TotalLines = finalText.Split('\n').Length;
+
+                // Se relee para verificar la escritura y devolver exactamente los hashes que daría un file.read.
+                try
+                {
+                    FileSnapshot after = Read(snap.Path);
+                    result.HashStrict = after.Sha256;
+                    result.HashNormalized = after.Sha256NormalizedWhitespace;
+                    if (!string.Equals(after.Sha256, writtenHash, StringComparison.OrdinalIgnoreCase))
+                        result.Warnings.Add("el archivo cambió justo después de escribirlo (¿otro proceso?): releelo antes del próximo patch.");
+                }
+                catch (Exception ex)
+                {
+                    result.Warnings.Add("el patch se escribió, pero no se pudo releer el archivo para verificarlo: " + ex.Message);
+                }
+
+                return result;
             }
             catch (PatchException ex)
             {
@@ -171,21 +194,67 @@ namespace McpHost.Core
             }
         }
 
-        // Cuando el validador semántico Y patch.exe rechazan el mismo diff, el diagnóstico de patch.exe
-        // suele ser el útil (p. ej. "ya aplicado"). Antes se descartaba y el modelo reintentaba en loop.
-        static string ComposeSemanticFailureMessage(string semanticMessage, Exception fallbackEx)
+        static PatchException AlreadyApplied(string detail, Exception inner)
         {
-            string fallbackMessage = fallbackEx == null ? null : fallbackEx.Message;
-            if (string.IsNullOrWhiteSpace(fallbackMessage)) return semanticMessage;
+            return new PatchException(
+                "El patch parece YA APLICADO: el contenido nuevo (líneas '+') ya está en el archivo.\n" +
+                "NO reenvíes el mismo diff: re-leé el bloque (file_read_range) y confirmá. Si querés revertirlo, mandá el diff invertido.\n\n" +
+                "=== Detalle del validador ===\n" + detail,
+                errorCode: "patch_already_applied",
+                reason: detail,
+                inner: inner);
+        }
 
-            fallbackMessage = fallbackMessage.Trim();
+        // patch.exe y la aplicación en memoria tienen que dar exactamente lo mismo; si no, no se escribe nada.
+        static string ApplyWithBothEngines(PatchPlan plan)
+        {
+            string patchExeDiff = UnifiedDiffNormalizer.BuildPatchExeDiff(plan);
+            string patchExeInput = UnifiedDiffNormalizer.BuildPatchExeInput(plan);
 
-            // Si patch.exe detectó que el patch ya está aplicado, ese diagnóstico manda: el mensaje del
-            // validador semántico ("regenerá el diff") llevaría a reintentar sin sentido.
-            if (fallbackMessage.IndexOf(ExternalPatchEngine.PatchAlreadyAppliedMarker, StringComparison.Ordinal) >= 0)
-                return fallbackMessage + "\n\n=== Detalle del validador interno ===\n" + semanticMessage;
+            List<string> fromPatchExe = UnifiedDiffNormalizer.SplitPatchExeOutput(ExternalPatchEngine.Apply(patchExeDiff, patchExeInput));
+            List<string> fromMemory = UnifiedDiffInMemoryApplier.Apply(plan);
 
-            return semanticMessage + "\n\n=== Diagnóstico de patch.exe (fallback) ===\n" + fallbackMessage;
+            int difference = FirstDifference(fromPatchExe, fromMemory);
+            if (difference >= 0)
+            {
+                string evidence = SaveEngineMismatchEvidence(plan, patchExeDiff, patchExeInput, fromPatchExe, fromMemory);
+                throw new PatchException(
+                    "Error interno del MCP: patch.exe y la aplicación en memoria dieron resultados distintos " +
+                    "(primera diferencia en la línea " + (difference + 1) + " del resultado). No se modificó el archivo." +
+                    (evidence == null ? string.Empty : "\nEvidencia: " + evidence),
+                    errorCode: "patch_engine_mismatch",
+                    evidenceDirectory: evidence);
+            }
+
+            return UnifiedDiffNormalizer.ComposeText(plan, fromMemory);
+        }
+
+        static int FirstDifference(List<string> a, List<string> b)
+        {
+            int common = Math.Min(a.Count, b.Count);
+            for (int i = 0; i < common; i++)
+                if (!string.Equals(a[i], b[i], StringComparison.Ordinal)) return i;
+            return a.Count == b.Count ? -1 : common;
+        }
+
+        static string SaveEngineMismatchEvidence(PatchPlan plan, string patchExeDiff, string patchExeInput, List<string> fromPatchExe, List<string> fromMemory)
+        {
+            string dir = McpErrorLogger.CreateIncidentDirectory("patch_engine_mismatch");
+            if (dir == null) return null;
+
+            var planText = new StringBuilder();
+            foreach (var hunk in plan.Hunks)
+                planText.Append("hunk ").Append(hunk.Number)
+                        .Append(": declarado ").Append(hunk.DeclaredStart)
+                        .Append(", start0 ").Append(hunk.Start0)
+                        .Append(", lineas ").Append(hunk.Lines.Count).Append('\n');
+
+            McpErrorLogger.SaveTextFile(dir, "entrada_patch_exe.txt", patchExeInput);
+            McpErrorLogger.SaveTextFile(dir, "diff_normalizado.diff", patchExeDiff);
+            McpErrorLogger.SaveTextFile(dir, "resultado_patch_exe.txt", string.Join("\n", fromPatchExe));
+            McpErrorLogger.SaveTextFile(dir, "resultado_en_memoria.txt", string.Join("\n", fromMemory));
+            McpErrorLogger.SaveTextFile(dir, "plan.txt", planText.ToString());
+            return dir;
         }
 
         static string AugmentPatchError(string message)
@@ -224,10 +293,10 @@ namespace McpHost.Core
 
             if (message.StartsWith("patch.exe falló", StringComparison.OrdinalIgnoreCase))
             {
+                // Con el diff ya validado y normalizado, que falle patch.exe no es culpa del diff recibido.
                 return message + "\n\n" +
-                       newlineNote + "\n" +
-                       "Si el mensaje incluye 'Hunk #... FAILED', el problema suele ser contexto incorrecto en el diff (no solo offset de líneas).\n" +
-                       "CLAUDE: usar parse_only=true para preflight y luego regenerar el patch con hunks más chicos y contexto exacto.";
+                       "Nota: el MCP ya había ubicado y validado todos los hunks antes de llamar a patch.exe; esto es un problema del MCP, no del diff. No se modificó el archivo.\n" +
+                       "CLAUDE: avisale al usuario (queda evidencia en erroresmcp) y, mientras tanto, probá partiendo el cambio en llamadas separadas.";
             }
 
             return message;
@@ -238,31 +307,7 @@ namespace McpHost.Core
             return text.Replace("\r\n", "\n").Replace("\r", "\n");
         }
 
-        static string BuildCanonicalUnifiedDiff(UnifiedDiff diff)
-        {
-            var sb = new StringBuilder();
-
-            if (!string.IsNullOrWhiteSpace(diff.OriginalFile))
-                sb.AppendLine(diff.OriginalFile.TrimEnd('\r', '\n'));
-            if (!string.IsNullOrWhiteSpace(diff.NewFile))
-                sb.AppendLine(diff.NewFile.TrimEnd('\r', '\n'));
-
-            foreach (var h in diff.Hunks)
-            {
-                sb.Append("@@ -")
-                  .Append(h.StartOriginal).Append(",").Append(h.LengthOriginal)
-                  .Append(" +")
-                  .Append(h.StartNew).Append(",").Append(h.LengthNew)
-                  .AppendLine(" @@");
-
-                foreach (var line in h.Lines)
-                    sb.AppendLine(line);
-            }
-
-            return sb.ToString();
-        }
-
-        static void WriteTimestampedBackup(FileSnapshot snap)
+        static string WriteTimestampedBackup(FileSnapshot snap)
         {
             string dir = Path.GetDirectoryName(snap.Path) ?? ".";
             string name = Path.GetFileName(snap.Path);
@@ -276,6 +321,7 @@ namespace McpHost.Core
 
             // Backup byte-identico del archivo original (antes de escribir el patch).
             File.WriteAllBytes(backupPath, snap.OriginalBytes);
+            return backupPath;
         }
 
     }
@@ -340,15 +386,24 @@ namespace McpHost.Core
 
         public static string CreateIncidentDirectory(string area)
         {
-            lock (Sync)
+            try
             {
-                EnsureMaintenanceLocked();
-                string stamp = DateTime.Now.ToString("yyyyMMdd_HHmmss_fff");
-                string id = Guid.NewGuid().ToString("N").Substring(0, 8);
-                string safeArea = SanitizeFileName(string.IsNullOrWhiteSpace(area) ? "mcp" : area);
-                string dir = Path.Combine(IncidentsDir, stamp + "_" + id + "_" + safeArea);
-                Directory.CreateDirectory(dir);
-                return dir;
+                lock (Sync)
+                {
+                    EnsureMaintenanceLocked();
+                    string stamp = DateTime.Now.ToString("yyyyMMdd_HHmmss_fff");
+                    string id = Guid.NewGuid().ToString("N").Substring(0, 8);
+                    string safeArea = SanitizeFileName(string.IsNullOrWhiteSpace(area) ? "mcp" : area);
+                    string dir = Path.Combine(IncidentsDir, stamp + "_" + id + "_" + safeArea);
+                    Directory.CreateDirectory(dir);
+                    return dir;
+                }
+            }
+            catch (Exception ex)
+            {
+                // El logger nunca debe tapar el error original ni tumbar el servidor.
+                ReportLoggerFailure("CreateIncidentDirectory", ex);
+                return null;
             }
         }
 
@@ -386,50 +441,69 @@ namespace McpHost.Core
 
         public static void LogError(string stage, string toolName, string message, Exception ex, Dictionary<string, object> errorData, Dictionary<string, object> args, Dictionary<string, string> fileRefs, string root)
         {
-            lock (Sync)
+            try
             {
-                EnsureMaintenanceLocked();
-
-                var row = new Dictionary<string, object>
+                lock (Sync)
                 {
-                    { "timestamp", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") },
-                    { "stage", stage ?? "unknown" },
-                    { "tool", toolName ?? "(none)" },
-                    { "message", message ?? string.Empty },
-                    { "error_data", errorData ?? new Dictionary<string, object>() },
-                    { "arguments", args ?? new Dictionary<string, object>() },
-                    { "root", root ?? string.Empty },
-                    { "files", fileRefs ?? new Dictionary<string, string>() }
-                };
+                    EnsureMaintenanceLocked();
 
-                if (ex != null) row["exception"] = ex.ToString();
+                    var row = new Dictionary<string, object>
+                    {
+                        { "timestamp", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") },
+                        { "stage", stage ?? "unknown" },
+                        { "tool", toolName ?? "(none)" },
+                        { "message", message ?? string.Empty },
+                        { "error_data", errorData ?? new Dictionary<string, object>() },
+                        { "arguments", args ?? new Dictionary<string, object>() },
+                        { "root", root ?? string.Empty },
+                        { "files", fileRefs ?? new Dictionary<string, string>() }
+                    };
 
-                string line = Json.Serialize(row) + Environment.NewLine;
-                File.AppendAllText(LogPath, line, Utf8NoBom);
+                    if (ex != null) row["exception"] = ex.ToString();
+
+                    string line = Json.Serialize(row) + Environment.NewLine;
+                    File.AppendAllText(LogPath, line, Utf8NoBom);
+                }
+            }
+            catch (Exception logEx)
+            {
+                // Si el log está bloqueado (otra instancia, antivirus, backup), se pierde esta línea, no el servidor.
+                ReportLoggerFailure("LogError", logEx);
             }
         }
 
+        static void ReportLoggerFailure(string where, Exception ex)
+        {
+            try { Console.Error.WriteLine("[erroresmcp] " + where + " falló: " + ex.Message); }
+            catch { }
+        }
+
+        // Mantenimiento "best effort": si falla (permisos, carpeta bloqueada), se sigue logueando igual.
         static void EnsureMaintenanceLocked()
         {
-            Directory.CreateDirectory(IncidentsDir);
-            TruncateLogIfNeeded();
-
-            DateTime now = DateTime.UtcNow;
-            if ((now - _lastCleanupUtc) < TimeSpan.FromMinutes(15)) return;
-            _lastCleanupUtc = now;
-
-            foreach (string dir in Directory.EnumerateDirectories(IncidentsDir))
+            try
             {
-                try
+                Directory.CreateDirectory(IncidentsDir);
+                TruncateLogIfNeeded();
+
+                DateTime now = DateTime.UtcNow;
+                if ((now - _lastCleanupUtc) < TimeSpan.FromMinutes(15)) return;
+                _lastCleanupUtc = now;
+
+                foreach (string dir in Directory.EnumerateDirectories(IncidentsDir))
                 {
-                    var info = new DirectoryInfo(dir);
-                    DateTime last = info.LastWriteTimeUtc;
-                    if (last == DateTime.MinValue) last = info.CreationTimeUtc;
-                    if (last != DateTime.MinValue && (now - last) > Retention)
-                        info.Delete(true);
+                    try
+                    {
+                        var info = new DirectoryInfo(dir);
+                        DateTime last = info.LastWriteTimeUtc;
+                        if (last == DateTime.MinValue) last = info.CreationTimeUtc;
+                        if (last != DateTime.MinValue && (now - last) > Retention)
+                            info.Delete(true);
+                    }
+                    catch { }
                 }
-                catch { }
             }
+            catch { }
         }
 
         static void TruncateLogIfNeeded()

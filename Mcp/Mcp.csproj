@@ -45,6 +45,8 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Diff\UnifiedDiff.cs" />
+    <Compile Include="Diff\UnifiedDiffInMemoryApplier.cs" />
+    <Compile Include="Diff\UnifiedDiffNormalizer.cs" />
     <Compile Include="Diff\UnifiedDiffParser.cs" />
     <Compile Include="Diff\UnifiedDiffSemanticValidator.cs" />
     <Compile Include="Diff\UnifiedDiffValidator.cs" />
@@ -58,6 +60,7 @@
     <Compile Include="McpConfig.cs" />
     <Compile Include="NewLineUtil.cs" />
     <Compile Include="OutlineEngine.cs" />
+    <Compile Include="PatchResult.cs" />
     <Compile Include="Server\DbConnectionResolver.cs" />
     <Compile Include="Server\DbConnectionInfo.cs" />
     <Compile Include="Server\DbCrypto.cs" />
@@ -66,6 +69,7 @@
     <Compile Include="Server\McpToolHandlers.cs" />
     <Compile Include="Server\RepoPolicy.cs" />
     <Compile Include="Server\StdioMcpServer.cs" />
+    <Compile Include="Utils\PathSuggestionUtil.cs" />
     <Compile Include="Utils\PathUtil.cs" />
     <Compile Include="Utils\TextDebugUtil.cs" />
     <Compile Include="Utils\UnicodeIssueUtil.cs" />

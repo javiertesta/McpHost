@@ -7,10 +7,11 @@ namespace McpHost.Utils
     static class PathUtil
     {
         /// <summary>
-        /// Normaliza rutas cuando se llama desde WSL hacia un .exe de Windows.
+        /// Normaliza rutas estilo WSL o Git Bash hacia rutas de Windows.
         /// Casos típicos:
         ///  - /mnt/d/Algo/...              -> D:\Algo\...
         ///  - D:\mnt\d\Algo\...        -> D:\Algo\...
+        ///  - /d/Algo/... (Git Bash)       -> D:\Algo\...
         /// </summary>
         public static string NormalizePathArg(string path)
         {
@@ -37,6 +38,14 @@ namespace McpHost.Utils
                 return drive + ":\\" + rest;
             }
 
+            // Caso: /d/Desarrollo/... (Git Bash / MSYS) -> D:\Desarrollo\...
+            if (IsMsysDrivePath(path))
+            {
+                char drive = char.ToUpperInvariant(path[1]);
+                string rest = path.Length > 3 ? path.Substring(3).Replace('/', '\\') : string.Empty;
+                return drive + ":\\" + rest;
+            }
+
             return path;
         }
 
@@ -45,9 +54,19 @@ namespace McpHost.Utils
             if (string.IsNullOrEmpty(path)) return false;
             if (Path.DirectorySeparatorChar != '\\') return false; // Solo para exe Windows.
             if (path.StartsWith("/mnt/", StringComparison.OrdinalIgnoreCase)) return false;
+            if (IsMsysDrivePath(path)) return false;
             if (path.StartsWith("/", StringComparison.Ordinal)) return true;
             if (path.StartsWith("~", StringComparison.Ordinal)) return true;
             return false;
+        }
+
+        // "/d" o "/d/..." (una sola letra de unidad, como las muestra Git Bash).
+        static bool IsMsysDrivePath(string path)
+        {
+            if (path.Length < 2 || path[0] != '/') return false;
+            char letter = path[1];
+            bool isAsciiLetter = (letter >= 'a' && letter <= 'z') || (letter >= 'A' && letter <= 'Z');
+            return isAsciiLetter && (path.Length == 2 || path[2] == '/');
         }
     }
 }

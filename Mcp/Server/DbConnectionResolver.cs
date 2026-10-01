@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Text.RegularExpressions;
 using System.Xml;
+using McpHost.Utils;
 
 namespace McpHost.Server
 {
@@ -19,7 +20,8 @@ namespace McpHost.Server
 
         public ResolvedDbConnection Resolve(string site)
         {
-            string siteArg = (site ?? "").Trim();
+            // Una ruta estilo Git Bash (/d/Desarrollo/...) se lleva a Windows, igual que en las tools de archivos.
+            string siteArg = PathUtil.NormalizePathArg((site ?? "").Trim());
 
             string envVarName;
             string envValue = ResolveFromEnvironment(siteArg, out envVarName);

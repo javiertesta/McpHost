@@ -41,7 +41,9 @@ namespace McpHost.Diff
                         out IList<string> effectiveLines,
                         out int foundStartIdx,
                         out Counts alignedCounts,
-                        out string alignError))
+                        out string alignError,
+                        out int ignoredLeading,
+                        out int ignoredTrailing))
                 {
                     throw new InvalidOperationException(
                         strictError + "\n\n" +
@@ -54,6 +56,8 @@ namespace McpHost.Diff
                 hunk.StartOriginal = foundStartIdx + 1;
                 hunk.LengthOriginal = alignedCounts.OriginalConsumed;
                 hunk.LengthNew = alignedCounts.NewProduced;
+                hunk.IgnoredLeadingContext = ignoredLeading;
+                hunk.IgnoredTrailingContext = ignoredTrailing;
 
                 if (!ReferenceEquals(effectiveLines, hunk.Lines))
                 {
@@ -62,6 +66,40 @@ namespace McpHost.Diff
                 }
 
                 lastEndIdx = foundStartIdx + alignedCounts.OriginalConsumed;
+            }
+        }
+
+        // ¿El cambio ya está en el archivo? Se invierte el diff (lo agregado pasa a ser lo que tiene que haber) y
+        // se valida como cualquier patch, sin aceptar contexto ignorado. Sólo se afirma si todos los hunks
+        // agregan algo: con borrados puros, que lo borrado "no esté" no prueba que el patch se haya aplicado.
+        public static bool LooksAlreadyApplied(string diffText, string originalText)
+        {
+            try
+            {
+                UnifiedDiff reversed = UnifiedDiffParser.Parse(diffText);
+                foreach (var hunk in reversed.Hunks)
+                {
+                    if (!hunk.Lines.Any(l => l[0] == '+')) return false;
+
+                    for (int i = 0; i < hunk.Lines.Count; i++)
+                    {
+                        string line = hunk.Lines[i];
+                        if (line[0] == '+') hunk.Lines[i] = "-" + line.Substring(1);
+                        else if (line[0] == '-') hunk.Lines[i] = "+" + line.Substring(1);
+                    }
+
+                    int newStart = hunk.StartNew;
+                    hunk.StartNew = hunk.StartOriginal;
+                    hunk.StartOriginal = newStart;
+                    hunk.DeclaredStartOriginal = newStart;
+                }
+
+                ValidateAgainstText(reversed, originalText);
+                return reversed.Hunks.All(h => h.IgnoredLeadingContext == 0 && h.IgnoredTrailingContext == 0);
+            }
+            catch
+            {
+                return false;
             }
         }
 
@@ -140,33 +178,39 @@ namespace McpHost.Diff
             out IList<string> effectiveLines,
             out int foundStartIdx,
             out Counts counts,
-            out string errorMessage)
+            out string errorMessage,
+            out int ignoredLeading,
+            out int ignoredTrailing)
         {
             effectiveLines = originalHunkLines;
             foundStartIdx = -1;
             counts = new Counts();
             errorMessage = null;
+            ignoredLeading = 0;
+            ignoredTrailing = 0;
 
             int baseConsumed = CountOriginalConsumed(originalHunkLines);
             int window = Math.Min(MaxSearchWindow, Math.Max(DefaultSearchWindow, baseConsumed * 20));
 
             foreach (var variant in EnumerateFuzzVariants(originalHunkLines, MaxFuzz))
             {
-                var hits = FindMatches(fileLines, variant, expectedStartIdx, minStartIdx, window);
+                var hits = FindMatches(fileLines, variant.Lines, expectedStartIdx, minStartIdx, window);
                 if (hits.Count == 0)
                 {
                     // Fallback: si el @@ está MUY corrido, buscar en todo el archivo.
-                    hits = FindMatches(fileLines, variant, expectedStartIdx, minStartIdx, int.MaxValue);
+                    hits = FindMatches(fileLines, variant.Lines, expectedStartIdx, minStartIdx, int.MaxValue);
                 }
 
                 if (hits.Count == 1)
                 {
                     int startIdx = hits[0];
-                    if (!TryValidateAt(fileLines, startIdx, variant, out counts, out errorMessage))
+                    if (!TryValidateAt(fileLines, startIdx, variant.Lines, out counts, out errorMessage))
                         return false;
 
-                    effectiveLines = variant;
+                    effectiveLines = variant.Lines;
                     foundStartIdx = startIdx;
+                    ignoredLeading = variant.Leading;
+                    ignoredTrailing = variant.Trailing;
                     return true;
                 }
 
@@ -189,10 +233,17 @@ namespace McpHost.Diff
             return false;
         }
 
-        static IEnumerable<IList<string>> EnumerateFuzzVariants(IList<string> hunkLines, int maxFuzz)
+        struct FuzzVariant
+        {
+            public IList<string> Lines;
+            public int Leading;   // líneas de contexto ignoradas al principio
+            public int Trailing;  // líneas de contexto ignoradas al final
+        }
+
+        static IEnumerable<FuzzVariant> EnumerateFuzzVariants(IList<string> hunkLines, int maxFuzz)
         {
             // (0,0) siempre
-            yield return hunkLines;
+            yield return new FuzzVariant { Lines = hunkLines };
 
             int firstChange = -1;
             int lastChange = -1;
@@ -240,7 +291,7 @@ namespace McpHost.Diff
                     for (int i = 0; i < count; i++)
                         eff.Add(hunkLines[start + i]);
 
-                    yield return eff;
+                    yield return new FuzzVariant { Lines = eff, Leading = fuzzLead, Trailing = fuzzTrail };
                 }
             }
         }

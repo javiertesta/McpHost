@@ -32,7 +32,18 @@ namespace McpHost.Server
                 line = line.Trim();
                 if (line.Length == 0) continue;
 
-                string response = ProcessMessage(line);
+                string response;
+                try
+                {
+                    response = ProcessMessage(line);
+                }
+                catch (Exception ex)
+                {
+                    // ProcessMessage ya atrapa todo; esto es la última red para que el loop no se corte nunca.
+                    Console.Error.WriteLine("MCP unexpected error: " + ex.Message);
+                    continue;
+                }
+
                 if (response != null)
                 {
                     Console.WriteLine(response);
@@ -45,14 +56,26 @@ namespace McpHost.Server
 
         string ProcessMessage(string json)
         {
+            Dictionary<string, object> msg;
             try
             {
-                var msg = _json.Deserialize<Dictionary<string, object>>(json);
-                if (msg == null) return MakeError(null, -32700, "Parse error");
+                msg = _json.Deserialize<Dictionary<string, object>>(json);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine("MCP error parsing message: " + ex.Message);
+                McpErrorLogger.LogError("process_message_exception", null, ex.Message, ex, null, null, null, _root);
+                return MakeError(null, -32700, "Parse error: " + ex.Message);
+            }
 
-                string method = msg.ContainsKey("method") ? msg["method"] as string : null;
-                bool hasId = msg.ContainsKey("id");
+            if (msg == null) return MakeError(null, -32700, "Parse error");
 
+            string method = msg.ContainsKey("method") ? msg["method"] as string : null;
+            bool hasId = msg.ContainsKey("id");
+            object id = hasId ? msg["id"] : null;
+
+            try
+            {
                 // Notifications (no "id" key at all) - don't respond per JSON-RPC 2.0 spec.
                 // Note: {"id": null} IS a request (malformed), not a notification.
                 if (!hasId)
@@ -60,8 +83,6 @@ namespace McpHost.Server
                     Console.Error.WriteLine("MCP notification: " + (method ?? "(null)"));
                     return null;
                 }
-
-                object id = msg["id"];
 
                 if (string.IsNullOrEmpty(method))
                     return MakeError(id, -32600, "Invalid Request: missing method");
@@ -80,15 +101,19 @@ namespace McpHost.Server
                         return HandleResourcesList(id);
                     case "resources/read":
                         return HandleResourcesRead(id, msg);
+                    case "resources/templates/list":
+                        return HandleResourceTemplatesList(id);
                     default:
                         return MakeError(id, -32601, "Method not found: " + method);
                 }
             }
             catch (Exception ex)
             {
+                // El JSON era válido, así que el error es interno: se responde con el mismo id (con id null el cliente
+                // no puede asociar la respuesta y la request queda colgada) y con -32603, no con "Parse error".
                 Console.Error.WriteLine("MCP error processing message: " + ex.Message);
-                McpErrorLogger.LogError("process_message_exception", null, ex.Message, ex, null, null, null, _root);
-                return MakeError(null, -32700, "Parse error: " + ex.Message);
+                McpErrorLogger.LogError("process_message_exception", method, ex.Message, ex, null, null, null, _root);
+                return hasId ? MakeError(id, -32603, "Internal error: " + ex.Message) : null;
             }
         }
 
@@ -168,15 +193,22 @@ namespace McpHost.Server
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine("[" + DateTime.Now.ToString("HH:mm:ss") + "] mcp error: " + toolName + " (" + sw.ElapsedMilliseconds + "ms): " + ex.Message);
-                McpErrorLogger.LogError("tool_exception", toolName, ex.Message, ex, null, arguments, null, _root);
+                // Task.Wait y algunos drivers envuelven la excepción real en una AggregateException cuyo mensaje
+                // ("Se han producido uno o varios errores.") no dice nada: se muestra la de adentro.
+                Exception shown = ex is AggregateException ? ex.GetBaseException() : ex;
+                Console.Error.WriteLine("[" + DateTime.Now.ToString("HH:mm:ss") + "] mcp error: " + toolName + " (" + sw.ElapsedMilliseconds + "ms): " + shown.Message);
+                McpErrorLogger.LogError("tool_exception", toolName, shown.Message, ex, null, arguments, null, _root);
+
+                string text = "Error: " + shown.Message;
+                string unknownArguments = _handlers.DescribeUnknownArguments(toolName, arguments);
+                if (unknownArguments != null) text += "\n\n" + unknownArguments;
 
                 var content = new List<object>
                 {
                     new Dictionary<string, object>
                     {
                         { "type", "text" },
-                        { "text", "Error: " + ex.Message }
+                        { "text", text }
                     }
                 };
 
@@ -194,6 +226,14 @@ namespace McpHost.Server
         {
             var resources = _handlers.GetResourceDefinitions();
             var result = new Dictionary<string, object> { { "resources", resources } };
+            return MakeResult(id, result);
+        }
+
+        // No hay templates, pero el cliente los pide porque el server anuncia "resources": sin esta respuesta cada
+        // sesión dejaba un "Method not found" en el log (más de mil filas de ruido).
+        string HandleResourceTemplatesList(object id)
+        {
+            var result = new Dictionary<string, object> { { "resourceTemplates", new List<object>() } };
             return MakeResult(id, result);
         }
 

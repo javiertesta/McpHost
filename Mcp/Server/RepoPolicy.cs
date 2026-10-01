@@ -87,6 +87,37 @@ namespace McpHost.Server
             return full;
         }
 
+        /// <summary>
+        /// Resuelve una ruta que tiene que ser un archivo existente. Si no existe, el error trae pistas para corregirla
+        /// en un solo intento (carpeta existente más cercana, nombres parecidos).
+        /// </summary>
+        public string ResolveExistingFile(string path, bool forWrite = false)
+        {
+            string full = ResolvePath(path, forWrite);
+            if (File.Exists(full)) return full;
+            if (Directory.Exists(full))
+                throw new InvalidOperationException("La ruta es una carpeta, no un archivo: " + full + "\nPara ver su contenido usá file.list.");
+            throw new FileNotFoundException(PathSuggestionUtil.BuildNotFoundMessage(full, _root, PathKind.File), full);
+        }
+
+        /// <summary>Igual que ResolveExistingFile, pero para una carpeta.</summary>
+        public string ResolveExistingDirectory(string path)
+        {
+            string full = ResolvePath(path);
+            if (Directory.Exists(full)) return full;
+            if (File.Exists(full))
+                throw new InvalidOperationException("La ruta es un archivo, no una carpeta: " + full + "\nPara leerlo usá file.read o file.read_range.");
+            throw new DirectoryNotFoundException(PathSuggestionUtil.BuildNotFoundMessage(full, _root, PathKind.Directory));
+        }
+
+        /// <summary>Igual que ResolveExistingFile, pero acepta un archivo o una carpeta.</summary>
+        public string ResolveExistingPath(string path)
+        {
+            string full = ResolvePath(path);
+            if (File.Exists(full) || Directory.Exists(full)) return full;
+            throw new FileNotFoundException(PathSuggestionUtil.BuildNotFoundMessage(full, _root, PathKind.Any), full);
+        }
+
         static bool StartsWithDir(string relative, string dirName)
         {
             return relative.StartsWith(dirName + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||

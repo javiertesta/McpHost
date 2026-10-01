@@ -41,7 +41,7 @@ namespace McpHost.Server
             tools.Add(new Dictionary<string, object>
             {
                 { "name", "file.read" },
-                { "description", "Read the full content of a file. Returns the text, a strict SHA-256 hash (over original bytes), and a whitespace-normalized hash. Always use these hashes when calling file.apply_patch_only." },
+                { "description", "Read the full content of a file. Returns the text, a strict SHA-256 hash (over original bytes), and a whitespace-normalized hash. Always use these hashes when calling file.apply_patch_only. For a line range use file.read_range (file.read always reads the whole file)." },
                 { "inputSchema", new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -99,7 +99,7 @@ namespace McpHost.Server
             tools.Add(new Dictionary<string, object>
             {
                 { "name", "file.apply_patch_only" },
-                { "description", "Apply a unified diff patch to a file. Requires the SHA-256 hash from the last file.read or file.read_range call to prevent editing stale content. The diff must be in standard unified diff format (git-style). Lines in the diff must start with ' ' (context), '+' (add), or '-' (remove). Supports parse_only=true for preflight validation without writing." },
+                { "description", "Apply a unified diff patch to a file. Requires the SHA-256 hash from the last file.read / file.read_range / file.stat, or the one returned by the previous successful file.apply_patch_only, to prevent editing stale content. The diff must be in standard unified diff format (git-style). Lines in the diff must start with ' ' (context), '+' (add), or '-' (remove). On success returns the new hash_strict/hash_normalized (usable for the next patch without re-reading) and the line where each hunk was applied. Supports parse_only=true to simulate the whole patch without writing." },
                 { "inputSchema", new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -114,7 +114,7 @@ namespace McpHost.Server
                                 { "hash", new Dictionary<string, object>
                                     {
                                         { "type", "string" },
-                                        { "description", "SHA-256 hash (64 hex chars) from the last file.read. Use either the strict or whitespace-normalized hash." }
+                                        { "description", "SHA-256 hash (64 hex chars) from the last file.read / file.read_range / file.stat, or returned by the previous successful file.apply_patch_only. Use either the strict or whitespace-normalized hash." }
                                     }
                                 },
                                 { "diff", new Dictionary<string, object>
@@ -138,7 +138,7 @@ namespace McpHost.Server
                                 { "parse_only", new Dictionary<string, object>
                                     {
                                         { "type", "boolean" },
-                                        { "description", "Set to true to validate/parse the diff without writing file changes. Default: false." }
+                                        { "description", "Set to true to simulate the whole patch (validation, application on a temporary copy and encoding checks) without writing file changes. Default: false." }
                                     }
                                 }
                             }
@@ -256,6 +256,12 @@ namespace McpHost.Server
                                     {
                                         { "type", "integer" },
                                         { "description", "Max total matches returned (default 200)." }
+                                    }
+                                },
+                                { "multiline", new Dictionary<string, object>
+                                    {
+                                        { "type", "boolean" },
+                                        { "description", "Allow the pattern to match across lines (rg -U). Default false." }
                                     }
                                 }
                             }
@@ -378,7 +384,7 @@ namespace McpHost.Server
         public List<object> ReadResource(string uri)
         {
             string pathArg = ResolveResourcePath(uri);
-            string resolved = _policy.ResolvePath(pathArg);
+            string resolved = _policy.ResolveExistingFile(pathArg);
             var snap = _gateway.Read(resolved);
 
             if (snap.Text.Length > MaxReadContentChars)
@@ -486,19 +492,58 @@ namespace McpHost.Server
             return "text/plain";
         }
 
+        // Argumentos que cada handler realmente lee (incluye alias aceptados que no figuran en el schema).
+        static readonly Dictionary<string, string[]> KnownArguments = new Dictionary<string, string[]>
+        {
+            { "file.read", new[] { "path" } },
+            { "file.read_range", new[] { "path", "start_line", "end_line" } },
+            { "file.apply_patch_only", new[] { "path", "hash", "diff", "allow_large", "allow_extralarge", "allow_extra_large", "parse_only" } },
+            { "db.query", new[] { "sql", "site", "max_rows" } },
+            { "db.scalar", new[] { "sql", "site" } },
+            { "file.grep", new[] { "pattern", "path", "glob", "context_lines", "case_insensitive", "max_matches", "multiline" } },
+            { "file.list", new[] { "path", "pattern", "max_files" } },
+            { "file.stat", new[] { "path" } },
+            { "file.outline", new[] { "path" } }
+        };
+
+        // Nombres que los modelos traen de otras herramientas. Sólo se SUGIEREN, no se traducen solos: algunos no
+        // significan lo mismo (offset/limit son inicio + cantidad; end_line es la última línea, inclusive).
+        static readonly Dictionary<string, string> ArgumentHints = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            { "file_path", "path" }, { "filepath", "path" }, { "file", "path" },
+            { "patch", "diff" },
+            { "expected_sha256", "hash" }, { "expected_strict_hash", "hash" }, { "expected_hash", "hash" }, { "sha256", "hash" },
+            { "startLine", "start_line" }, { "start", "start_line" }, { "offset", "start_line" },
+            { "endLine", "end_line" }, { "end", "end_line" }, { "limit", "end_line" },
+            { "query", "sql" },
+            { "parseOnly", "parse_only" }, { "dry_run", "parse_only" }, { "dryRun", "parse_only" },
+            { "allowLarge", "allow_large" }, { "allowExtraLarge", "allow_extralarge" },
+            { "caseInsensitive", "case_insensitive" }, { "ignore_case", "case_insensitive" },
+            { "contextLines", "context_lines" }, { "maxMatches", "max_matches" }, { "head_limit", "max_matches" },
+            { "type", "glob" }, { "maxFiles", "max_files" }, { "maxRows", "max_rows" }
+        };
+
         public ToolResult CallTool(string name, Dictionary<string, object> arguments)
         {
+            string unknownArguments = DescribeUnknownArguments(name, arguments);
+
+            // Es la única herramienta que escribe: un flag mal escrito (p. ej. "parseOnly") no puede terminar
+            // aplicando el patch en vez de simularlo. En las de lectura alcanza con avisar.
+            if (unknownArguments != null && name == "file.apply_patch_only")
+                return ErrorResult(unknownArguments + "\nNo se aplicó nada: corregí los nombres y reintentá.");
+
+            ToolResult result;
             switch (name)
             {
-                case "file.read": return HandleFileRead(arguments);
-                case "file.read_range": return HandleFileReadRange(arguments);
-                case "file.apply_patch_only": return HandleApplyPatch(arguments);
-                case "db.query": return HandleDbQuery(arguments);
-                case "db.scalar": return HandleDbScalar(arguments);
-                case "file.grep": return HandleFileGrep(arguments);
-                case "file.list": return HandleFileList(arguments);
-                case "file.stat": return HandleFileStat(arguments);
-                case "file.outline": return HandleFileOutline(arguments);
+                case "file.read": result = HandleFileRead(arguments); break;
+                case "file.read_range": result = HandleFileReadRange(arguments); break;
+                case "file.apply_patch_only": result = HandleApplyPatch(arguments); break;
+                case "db.query": result = HandleDbQuery(arguments); break;
+                case "db.scalar": result = HandleDbScalar(arguments); break;
+                case "file.grep": result = HandleFileGrep(arguments); break;
+                case "file.list": result = HandleFileList(arguments); break;
+                case "file.stat": result = HandleFileStat(arguments); break;
+                case "file.outline": result = HandleFileOutline(arguments); break;
                 default:
                     return new ToolResult
                     {
@@ -506,6 +551,47 @@ namespace McpHost.Server
                         Content = TextContent("Unknown tool: " + name)
                     };
             }
+
+            if (unknownArguments != null)
+                result.Content.Add(new Dictionary<string, object> { { "type", "text" }, { "text", "AVISO: " + unknownArguments } });
+            return result;
+        }
+
+        // Argumentos recibidos que la tool no usa, con el nombre correcto cuando se reconoce. Null si no hay ninguno.
+        public string DescribeUnknownArguments(string toolName, Dictionary<string, object> arguments)
+        {
+            string[] known;
+            if (toolName == null || arguments == null || arguments.Count == 0 || !KnownArguments.TryGetValue(toolName, out known))
+                return null;
+
+            var unknown = new List<string>();
+            bool rangeArguments = false;
+            foreach (string key in arguments.Keys)
+            {
+                if (Array.IndexOf(known, key) >= 0) continue;
+
+                string hint;
+                bool hintApplies = ArgumentHints.TryGetValue(key, out hint) && Array.IndexOf(known, hint) >= 0;
+                unknown.Add(hintApplies ? key + " (¿" + hint + "?)" : key);
+
+                if (toolName == "file.read" && IsLineRangeArgument(key)) rangeArguments = true;
+            }
+            if (unknown.Count == 0) return null;
+
+            string valid = string.Join(", ", Array.FindAll(known, k => k != "allow_extra_large"));
+            string text = "Argumentos no reconocidos por " + toolName + ": " + string.Join(", ", unknown) + ". Válidos: " + valid + ".";
+            if (Array.IndexOf(known, "end_line") >= 0 && (arguments.ContainsKey("limit") || arguments.ContainsKey("offset")))
+                text += "\nOjo: offset/limit no existen acá; end_line es la última línea a leer (inclusive), no una cantidad.";
+            if (rangeArguments)
+                text += "\nfile.read siempre lee el archivo completo; para un rango de líneas usá file.read_range (start_line, end_line).";
+            return text;
+        }
+
+        static bool IsLineRangeArgument(string key)
+        {
+            string k = key.ToLowerInvariant();
+            return k == "start_line" || k == "end_line" || k == "startline" || k == "endline" ||
+                   k == "offset" || k == "limit" || k == "start" || k == "end";
         }
 
         ToolResult HandleFileRead(Dictionary<string, object> args)
@@ -514,7 +600,7 @@ namespace McpHost.Server
             if (string.IsNullOrEmpty(path))
                 return ErrorResult("Missing required argument: path");
 
-            string resolved = _policy.ResolvePath(path);
+            string resolved = _policy.ResolveExistingFile(path);
             var snap = _gateway.Read(resolved);
 
             if (snap.Text.Length > MaxReadContentChars)
@@ -554,6 +640,9 @@ namespace McpHost.Server
             if (string.IsNullOrEmpty(path))
                 return ErrorResult("Missing required argument: path");
 
+            if (!args.ContainsKey("start_line")) return ErrorResult("Missing required argument: start_line");
+            if (!args.ContainsKey("end_line")) return ErrorResult("Missing required argument: end_line");
+
             int startLine = GetIntArg(args, "start_line", 0);
             int endLine = GetIntArg(args, "end_line", 0);
 
@@ -567,7 +656,7 @@ namespace McpHost.Server
                 endLine = tmp;
             }
 
-            string resolved = _policy.ResolvePath(path);
+            string resolved = _policy.ResolveExistingFile(path);
             var snap = _gateway.Read(resolved);
 
             if (UnicodeIssueUtil.ContainsInvalidUnicode(snap.Text))
@@ -631,22 +720,15 @@ namespace McpHost.Server
             bool allowLarge = allowExtraLarge || GetBoolArg(args, "allow_large", false);
             bool parseOnly = GetBoolArg(args, "parse_only", false);
 
-            string resolved = _policy.ResolvePath(path, forWrite: true);
+            string resolved = _policy.ResolveExistingFile(path, forWrite: true);
             var snap = _gateway.Read(resolved);
 
+            PatchResult patchResult;
             try
             {
-                if (parseOnly)
-                {
-                    _gateway.ValidatePatchOnly(snap, diff, hash, allowLarge, allowExtraLarge);
-                    return new ToolResult
-                    {
-                        IsError = false,
-                        Content = TextContent("OK - patch parsed and validated successfully (parse_only=true, no file changes).")
-                    };
-                }
-
-                _gateway.ApplyPatchOnly(snap, diff, hash, allowLarge, allowExtraLarge);
+                patchResult = parseOnly
+                    ? _gateway.ValidatePatchOnly(snap, diff, hash, allowLarge, allowExtraLarge)
+                    : _gateway.ApplyPatchOnly(snap, diff, hash, allowLarge, allowExtraLarge);
             }
             catch (PatchException ex)
             {
@@ -686,11 +768,47 @@ namespace McpHost.Server
                 return ErrorResult(BuildPatchErrorMessage(ex), MergeErrorData(errorData, refs));
             }
 
-            return new ToolResult
+            return BuildPatchSuccessResult(path, parseOnly, patchResult);
+        }
+
+        ToolResult BuildPatchSuccessResult(string path, bool parseOnly, PatchResult patchResult)
+        {
+            var text = new StringBuilder(parseOnly
+                ? "OK - patch parsed and validated successfully (parse_only=true, no file changes)."
+                : "OK - patch applied successfully to " + path);
+            foreach (string warning in patchResult.Warnings)
+                text.Append("\nAVISO: ").Append(warning);
+
+            var hunks = new List<object>();
+            foreach (var hunk in patchResult.Hunks)
             {
-                IsError = false,
-                Content = TextContent("OK - patch applied successfully to " + path)
+                hunks.Add(new Dictionary<string, object>
+                {
+                    { "hunk", hunk.Hunk },
+                    { "declared_line", hunk.DeclaredLine },
+                    { "applied_line", hunk.AppliedLine },
+                    { "pure_insertion", hunk.PureInsertion },
+                    { "ignored_context_leading", hunk.IgnoredLeadingContext },
+                    { "ignored_context_trailing", hunk.IgnoredTrailingContext }
+                });
+            }
+
+            // Con parse_only los hashes son los del archivo actual (sirven para aplicar); si se aplicó, los del
+            // contenido nuevo (sirven para el próximo patch sin releer).
+            var meta = new Dictionary<string, object>
+            {
+                { "hash_strict", patchResult.HashStrict },
+                { "hash_normalized", patchResult.HashNormalized },
+                { "total_lines", patchResult.TotalLines },
+                { "file_changed", !parseOnly },
+                { "hunks", hunks }
             };
+            if (!string.IsNullOrEmpty(patchResult.BackupPath)) meta["backup_path"] = patchResult.BackupPath;
+
+            var content = new List<object>();
+            content.Add(new Dictionary<string, object> { { "type", "text" }, { "text", text.ToString() } });
+            content.Add(new Dictionary<string, object> { { "type", "text" }, { "text", _json.Serialize(meta) } });
+            return new ToolResult { Content = content, IsError = false };
         }
 
         ToolResult HandleDbQuery(Dictionary<string, object> args)
@@ -743,7 +861,7 @@ namespace McpHost.Server
             int maxMatches = GetIntArg(args, "max_matches", 200);
             bool multiline = GetBoolArg(args, "multiline", false);
 
-            string resolved = _policy.ResolvePath(path);
+            string resolved = _policy.ResolveExistingPath(path);
 
             List<GrepResult> results;
             try
@@ -783,7 +901,7 @@ namespace McpHost.Server
             string pattern = GetStringArg(args, "pattern") ?? "*";
             int maxFiles = GetIntArg(args, "max_files", 500);
 
-            string resolved = _policy.ResolvePath(path);
+            string resolved = _policy.ResolveExistingDirectory(path);
 
             var sb = new StringBuilder();
             int count = 0;
@@ -791,7 +909,7 @@ namespace McpHost.Server
 
             string patternNormalized = NormalizeGlobPattern(pattern);
 
-            foreach (string fullPath in Directory.EnumerateFiles(resolved, "*", SearchOption.AllDirectories))
+            foreach (string fullPath in EnumerateFilesSkipDenied(resolved))
             {
                 string relative = GetRelativePath(resolved, fullPath);
                 if (IsDeniedForResources(relative)) continue;
@@ -819,7 +937,7 @@ namespace McpHost.Server
             if (string.IsNullOrEmpty(path))
                 return ErrorResult("Missing required argument: path");
 
-            string resolved = _policy.ResolvePath(path);
+            string resolved = _policy.ResolveExistingFile(path);
             var snap = _gateway.Read(resolved);
 
             int lineCount = snap.Text.Split('\n').Length;
@@ -843,7 +961,7 @@ namespace McpHost.Server
             if (string.IsNullOrEmpty(path))
                 return ErrorResult("Missing required argument: path");
 
-            string resolved = _policy.ResolvePath(path);
+            string resolved = _policy.ResolveExistingFile(path);
             var snap = _gateway.Read(resolved);
             string ext = Path.GetExtension(resolved);
 
@@ -1024,6 +1142,8 @@ namespace McpHost.Server
             return p == pattern.Length;
         }
 
+        // Recorre en anchura salteando carpetas denegadas y junctions. Una carpeta sin permiso (o que desaparece
+        // mientras se recorre) se saltea: antes cortaba resources/list y file.list enteros.
         static IEnumerable<string> EnumerateFilesSkipDenied(string dir)
         {
             var queue = new Queue<string>();
@@ -1031,12 +1151,31 @@ namespace McpHost.Server
             while (queue.Count > 0)
             {
                 string current = queue.Dequeue();
-                foreach (string f in Directory.EnumerateFiles(current))
+
+                string[] files;
+                string[] directories;
+                try
+                {
+                    files = Directory.GetFiles(current);
+                    directories = Directory.GetDirectories(current);
+                }
+                catch (Exception ex) when (ex is UnauthorizedAccessException || ex is IOException)
+                {
+                    continue;
+                }
+
+                foreach (string f in files)
                     yield return f;
-                foreach (string d in Directory.EnumerateDirectories(current))
-                    if (!IsDeniedForResources(Path.GetFileName(d)))
+                foreach (string d in directories)
+                    if (!IsDeniedForResources(Path.GetFileName(d)) && !IsReparsePoint(d))
                         queue.Enqueue(d);
             }
+        }
+
+        static bool IsReparsePoint(string directory)
+        {
+            try { return (File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0; }
+            catch { return true; }
         }
     }
 }
