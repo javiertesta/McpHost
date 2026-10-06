@@ -103,6 +103,11 @@ namespace McpHost.Server
                         return HandleResourcesRead(id, msg);
                     case "resources/templates/list":
                         return HandleResourceTemplatesList(id);
+                    // Sondeo de versión (MCP 2026-07-28) que el cliente manda antes de "initialize". Para un server
+                    // 2024-11-05 la respuesta esperada es "Method not found" y el cliente sigue con el handshake de
+                    // siempre; no se anota en el log porque dejaba una fila de ruido por sesión.
+                    case "server/discover":
+                        return MakeErrorResponse(id, -32601, "Method not found: " + method);
                     default:
                         return MakeError(id, -32601, "Method not found: " + method);
                 }
@@ -274,7 +279,13 @@ namespace McpHost.Server
                 null,
                 null,
                 _root);
-                
+
+            return MakeErrorResponse(id, code, message);
+        }
+
+        // Arma la respuesta de error sin anotarla en erroresmcp.log: para los errores que son la respuesta esperada.
+        string MakeErrorResponse(object id, int code, string message)
+        {
             var resp = new Dictionary<string, object>
             {
                 { "jsonrpc", "2.0" },
